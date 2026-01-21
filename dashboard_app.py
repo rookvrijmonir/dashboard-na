@@ -35,10 +35,21 @@ st.markdown("""
 # DATA LOADING (CACHED)
 # ============================================================================
 
+def get_latest_data_file():
+    """Find the most recent coach_eligibility file."""
+    data_dir = Path("data")
+    files = list(data_dir.glob("coach_eligibility_*.xlsx"))
+    if not files:
+        return None
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[0]
+
 @st.cache_data
 def load_coach_data():
     """Load coaches data from Excel."""
-    file_path = Path("data/coach_eligibility_20260121_195256.xlsx")
+    file_path = get_latest_data_file()
+    if file_path is None:
+        raise FileNotFoundError("No coach_eligibility_*.xlsx found in data/")
     df = pd.read_excel(file_path, sheet_name="Coaches")
 
     # Filter uit: Nabellers, programma's, gestopte accounts, onbekenden
@@ -60,7 +71,9 @@ def load_coach_data():
 @st.cache_data
 def load_deal_class_summary():
     """Load deal class summary for sanity checks."""
-    file_path = Path("data/coach_eligibility_20260121_195256.xlsx")
+    file_path = get_latest_data_file()
+    if file_path is None:
+        raise FileNotFoundError("No coach_eligibility_*.xlsx found in data/")
     df = pd.read_excel(file_path, sheet_name="DealClassSummary")
     return df
 
@@ -538,10 +551,16 @@ st.dataframe(
 # ============================================================================
 
 st.markdown("---")
-st.markdown("""
+# Get data file info for footer
+data_file = get_latest_data_file()
+data_date = data_file.stem.split("_")[-2] if data_file else "onbekend"  # Extract YYYYMMDD from filename
+if len(data_date) == 8:
+    data_date = f"{data_date[6:8]}-{data_date[4:6]}-{data_date[:4]}"  # Format as DD-MM-YYYY
+
+st.markdown(f"""
 <div style='text-align: center; color: gray; font-size: 0.9em;'>
     <p>💊 <b>Coach Prestatie Dashboard - Nationale Apotheek</b></p>
-    <p>Data van 21-01-2026 | Alle data komt uit lokale bestanden</p>
+    <p>Data van {data_date} | Bestand: {data_file.name if data_file else 'onbekend'}</p>
     <p>📖 Klik op <b>Uitleg</b> in het linkermenu voor hulp</p>
 </div>
 """, unsafe_allow_html=True)

@@ -23,3 +23,11 @@ Thumbs.db
 
 # Data files (optional - remove if you want to track data)
 # data/
+
+# ETL cache and logs
+etl/cache/
+etl/logs/
+
+# Secrets
+.env
+.env.local
