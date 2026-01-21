@@ -26,17 +26,20 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ============================================================================
-# SECTION 0: BELANGRIJKE CIJFERS
+# SECTION 0: BELANGRIJKE INFORMATIE
 # ============================================================================
 
 st.markdown("---")
-st.markdown("## 📊 Belangrijke Cijfers")
+st.markdown("## 📊 Belangrijke Informatie")
 
 st.info("""
-**Medianen per periode (de rode lijnen in de grafieken):**
-- **1 maand:** 55.6%
-- **3 maanden:** 54.5%
-- **6 maanden:** 50.0%
+**Over de mediaan (rode lijn in grafieken):**
+
+De mediaan wordt **dynamisch berekend** op basis van de geselecteerde periode en filters.
+Dit betekent dat de waarde kan verschillen afhankelijk van:
+- De gekozen periode (1, 3 of 6 maanden)
+- Welke coaches zijn uitgefilterd
+- De huidige dataset
 
 *De mediaan is het middelste winstpercentage. 50% van de coaches scoort hoger, 50% lager.*
 """)
@@ -55,6 +58,8 @@ Je kunt zien:
 - Hoeveel daarvan gewonnen zijn (winstpercentage)
 - Hoe coaches zich verhouden tot het gemiddelde
 - Welke coaches in aanmerking komen voor bepaalde programma's
+
+**Nieuw:** Je kunt nu zelf de data verversen via de **🔄 Data Beheer** pagina!
 """)
 
 # ============================================================================
@@ -67,6 +72,9 @@ st.markdown("## 2. Wat betekenen de statussen?")
 st.markdown("""
 Elke coach krijgt een **status** toegewezen. Dit bepaalt of ze in aanmerking komen
 voor coaching programma's of andere acties.
+
+**Let op:** De status wordt **dynamisch berekend** in het dashboard. Je kunt de
+drempelwaarden aanpassen in de sidebar onder "Status Berekening".
 """)
 
 col1, col2 = st.columns(2)
@@ -77,8 +85,8 @@ with col1:
     **Beste presteerders**
 
     Deze coaches:
-    - Hebben een winstpercentage **boven de mediaan** van die periode
-    - Hebben **minimaal 14 deals** in de afgelopen maand
+    - Hebben een winstpercentage **boven de mediaan**
+    - Hebben voldoende deals (standaard: minimaal 14)
     - Zijn statistisch betrouwbaar door voldoende volume
 
     *Dit zijn de coaches die consistent goed presteren.*
@@ -89,9 +97,9 @@ with col1:
     **Opkomende coaches**
 
     Deze coaches:
-    - Hebben minder deals dan Laag 2
+    - Hebben minder deals dan Laag 2 (maar minimaal de helft)
+    - Winstpercentage is minimaal 80% van de mediaan
     - Zijn wel actief en presteren redelijk
-    - Hebben potentie om door te groeien naar Laag 2
 
     *Deze coaches verdienen aandacht en ondersteuning.*
     """)
@@ -104,21 +112,21 @@ with col2:
     Deze coaches worden uitgesloten om twee mogelijke redenen:
 
     **Reden 1: Te weinig deals**
-    - Minder dan 14 deals in de afgelopen maand
+    - Minder dan de minimum drempel
     - Zelfs met een hoog winstpercentage is dit niet betrouwbaar
     - Voorbeeld: 75% winst op 3 deals kan puur geluk zijn
 
     **Reden 2: Onder de mediaan**
-    - Winstpercentage onder de mediaan voor die periode
+    - Winstpercentage onder de (aangepaste) mediaan
     - Ook met veel deals presteren ze onder gemiddeld
     """)
 
-    st.markdown("### Geen data")
+    st.markdown("### ⚪ Geen data")
     st.warning("""
     **Geen recente activiteit**
 
     Deze coaches:
-    - Hebben 0 deals in de afgelopen maand
+    - Hebben 0 deals in de geselecteerde periode
     - Kunnen niet beoordeeld worden
     - Zijn mogelijk inactief of nieuw
     """)
@@ -153,6 +161,7 @@ st.markdown("""
 - **Clara** heeft 70% winst op 50 deals. Dit is een betrouwbaar patroon.
 
 > **Vuistregel:** Pas bij ~14+ deals wordt een winstpercentage statistisch betekenisvol.
+> Je kunt deze drempel aanpassen in de sidebar.
 """)
 
 # ============================================================================
@@ -162,43 +171,15 @@ st.markdown("""
 st.markdown("---")
 st.markdown("## 4. Hoe lees je de grafieken?")
 
-st.markdown("### 📊 Grafiek 1: Verdeling Winstpercentage")
-st.markdown("""
-**Wat zie je?**
-- Een staafdiagram (histogram) dat laat zien hoeveel coaches in elke winstpercentage-groep zitten
-- De rode stippellijn toont de **mediaan** (het midden)
-
-**Hoe interpreteer je dit?**
-- Coaches links van de rode lijn presteren **onder gemiddeld**
-- Coaches rechts van de rode lijn presteren **boven gemiddeld**
-- Hoe hoger de staaf, hoe meer coaches in die groep zitten
-
-**Voorbeeld interpretatie:**
-> "De meeste coaches zitten tussen 40% en 60% winstpercentage.
-> De mediaan is het middelste percentage - de helft presteert beter, de helft slechter. Let op: de mediaan verschilt per periode!"
-""")
-
-st.markdown("### 📊 Grafiek 2: Aantal Coaches per Status")
-st.markdown("""
-**Wat zie je?**
-- Een staafdiagram met het aantal coaches per status
-
-**Hoe interpreteer je dit?**
-- Je ziet direct hoeveel coaches in elke categorie vallen
-- Dit geeft een overzicht van de verdeling van je team
-
-**Voorbeeld interpretatie:**
-> "Van de 105 coaches zijn er 16 in Laag 2 (top presteerders) en 51 uitgesloten."
-""")
-
-st.markdown("### 📊 Grafiek 3: Deals vs Winstpercentage (Scatter)")
+st.markdown("### 📊 Grafiek 1: Deals vs Winstpercentage (Scatter)")
 st.markdown("""
 **Wat zie je?**
 - Elke **stip is één coach**
 - **Horizontale as (→):** Aantal deals - meer naar rechts = meer deals
 - **Verticale as (↑):** Winstpercentage - hoger = beter percentage
 - **Kleuren:** Verschillende statussen
-- **Rode stippellijn:** De mediaan (verschilt per periode!)
+- **Rode stippellijn (horizontaal):** De mediaan
+- **Blauwe stippellijn (verticaal):** Je ingestelde minimum deals
 
 **Hoe interpreteer je dit?**
 - **Rechtsboven:** Veel deals EN hoog percentage = beste coaches
@@ -211,47 +192,88 @@ st.markdown("""
 > Coach Y staat linksboven met 75% maar slechts 3 deals - dit kan toeval zijn."
 """)
 
-st.markdown("### 📊 Grafiek 4: Vergelijking 1, 3 en 6 Maanden")
+st.markdown("### 📊 Grafiek 2: Verdeling Winstpercentage (Histogram)")
 st.markdown("""
 **Wat zie je?**
-- Dezelfde verdeling als grafiek 1, maar dan over verschillende periodes
-- Klik op de knoppen om te wisselen tussen periodes
+- Een staafdiagram dat laat zien hoeveel coaches in elke winstpercentage-groep zitten
+- De rode stippellijn toont de **mediaan** (het midden)
 
 **Hoe interpreteer je dit?**
-- Vergelijk hoe de verdeling verandert over tijd
-- Een stabiele verdeling = consistente prestaties
-- Grote verschuivingen = seizoenseffecten of veranderingen in het team
+- Coaches links van de rode lijn presteren **onder gemiddeld**
+- Coaches rechts van de rode lijn presteren **boven gemiddeld**
+- Hoe hoger de staaf, hoe meer coaches in die groep zitten
+
+**Voorbeeld interpretatie:**
+> "De meeste coaches zitten tussen 40% en 60% winstpercentage.
+> De mediaan is het middelste percentage - de helft presteert beter, de helft slechter."
+""")
+
+st.markdown("### 📊 Grafiek 3: Aantal Coaches per Status")
+st.markdown("""
+**Wat zie je?**
+- Een staafdiagram met het aantal coaches per status
+
+**Hoe interpreteer je dit?**
+- Je ziet direct hoeveel coaches in elke categorie vallen
+- Dit geeft een overzicht van de verdeling van je team
+
+**Voorbeeld interpretatie:**
+> "Van de 105 coaches zijn er 16 in Laag 2 (top presteerders) en 51 uitgesloten."
 """)
 
 # ============================================================================
-# SECTION 5: DE TABEL UITGELEGD
+# SECTION 5: PERIODE SELECTIE
 # ============================================================================
 
 st.markdown("---")
-st.markdown("## 5. Hoe lees je de tabel?")
+st.markdown("## 5. Periode selectie")
 
 st.markdown("""
-De tabel onderaan het dashboard toont alle coaches met hun cijfers.
+In de sidebar kun je kiezen tussen drie periodes:
+
+| Periode | Betekenis |
+|---------|-----------|
+| **1 maand** | Meest recente prestaties |
+| **3 maanden** | Medium-termijn trend |
+| **6 maanden** | Langere termijn stabiliteit |
+
+**Belangrijk:** De gekozen periode beïnvloedt **alle** grafieken en berekeningen!
+
+- De mediaan wordt herberekend
+- De status wordt herberekend
+- De tabel toont deals/winst% voor die periode
+""")
+
+# ============================================================================
+# SECTION 6: DE TABEL UITGELEGD
+# ============================================================================
+
+st.markdown("---")
+st.markdown("## 6. Hoe lees je de tabel?")
+
+st.markdown("""
+De tabel onderaan het dashboard toont alle coaches met hun cijfers **voor de geselecteerde periode**.
 
 | Kolom | Betekenis |
 |-------|-----------|
-| **Coach Naam** | Naam van de coach |
-| **Deals (1/3/6 mnd)** | Aantal deals in die periode |
-| **Winst % (1/3/6 mnd)** | Winstpercentage in die periode |
-| **Status** | De toegewezen status (Laag 2, Laag 3, etc.) |
+| **Coach** | Naam van de coach |
+| **Status** | De berekende status (Laag 2, Laag 3, etc.) |
+| **Deals** | Aantal deals in de geselecteerde periode |
+| **Winst%** | Winstpercentage in de geselecteerde periode |
+| **Boven drempel** | ✅ als de coach meer dan het minimum aantal deals heeft |
 
 **Tips voor de tabel:**
 - Klik op een kolomkop om te sorteren
-- Vergelijk de 1-maand met 3-maand cijfers om trends te zien
+- Wissel van periode in de sidebar om trends te zien
 - Een coach met dalende percentages over tijd verdient aandacht
 """)
 
 # ============================================================================
-# SECTION 6: DATA FILTERING
+# SECTION 7: DATA FILTERING
 # ============================================================================
 
 st.markdown("---")
-st.markdown("## 6. Welke data is uitgefilterd?")
+st.markdown("## 7. Welke data is uitgefilterd?")
 
 st.markdown("""
 Niet alle entries in de brondata zijn echte coaches. De volgende worden
@@ -263,32 +285,61 @@ st.error("""
 
 | Naam | Reden |
 |------|-------|
-| Nabeller Rookvrij | Dit is een nabeller, geen coach |
+| Nabeller * | Dit zijn nabellers, geen coaches |
 | Rookvrij en Fitter Het Gooi | Dit is een programma, geen persoon |
+| 167331984 | Onbekend account |
+| UNKNOWN | Onbekende entries |
+| benVitaal Coaching | Gestopt account |
+| SportQube Algemeen | Doorstuur account |
 
 Deze entries zouden de statistieken vervuilen als ze meegeteld worden,
 omdat ze geen echte coach-prestaties vertegenwoordigen.
 """)
 
 st.info("""
-**Let op:** Als er in de toekomst meer nabellers of programma's worden toegevoegd
-aan de brondata, moeten deze ook uitgefilterd worden in de dashboard code.
+**Extra filtering:** In de sidebar kun je ook handmatig coaches uitsluiten
+via de "Coaches Uitsluiten" optie.
 """)
 
 # ============================================================================
-# SECTION 7: VEELGESTELDE VRAGEN
+# SECTION 8: DATA BEHEER
 # ============================================================================
 
 st.markdown("---")
-st.markdown("## 7. Veelgestelde vragen")
+st.markdown("## 8. Data vernieuwen")
+
+st.markdown("""
+De data komt uit HubSpot en kan vernieuwd worden via de **🔄 Data Beheer** pagina.
+
+**Hoe werkt het?**
+1. Ga naar **🔄 Data Beheer** in het linkermenu
+2. Klik op de **Data Ophalen** knop
+3. Wacht tot de voortgang 100% is
+4. De nieuwe data wordt automatisch geselecteerd
+
+**Run historie:**
+Elke keer dat je data ophaalt, wordt een nieuwe "run" opgeslagen.
+Je kunt altijd terug naar eerdere runs via de dropdown in Data Beheer.
+
+**Tip:** Kijk onderaan het dashboard voor de datum van de huidige dataset.
+""")
+
+# ============================================================================
+# SECTION 9: VEELGESTELDE VRAGEN
+# ============================================================================
+
+st.markdown("---")
+st.markdown("## 9. Veelgestelde vragen")
 
 with st.expander("Waarom heeft coach X een hoog percentage maar status 'Uitsluiten'?"):
     st.markdown("""
     Dit komt door **te weinig deals**. Een hoog winstpercentage op basis van
-    1-5 deals is statistisch niet betrouwbaar. Het kan puur geluk zijn.
+    weinig deals is statistisch niet betrouwbaar. Het kan puur geluk zijn.
 
     **Voorbeeld:** Een coach met 2 gewonnen deals van 3 totaal heeft 66% winst.
     Maar dit zegt weinig over hun echte prestaties.
+
+    Je kunt de minimum deals drempel aanpassen in de sidebar.
     """)
 
 with st.expander("Wat is het verschil tussen 'ruwe winrate' en 'winstpercentage'?"):
@@ -301,35 +352,52 @@ with st.expander("Wat is het verschil tussen 'ruwe winrate' en 'winstpercentage'
     extreme uitschieters te voorkomen.
     """)
 
-with st.expander("Hoe vaak wordt de data bijgewerkt?"):
+with st.expander("Hoe vaak moet ik de data verversen?"):
     st.markdown("""
-    De data in dit dashboard komt uit een Excel-bestand dat periodiek wordt
-    gegenereerd. Kijk naar de datum in de footer voor de laatste update.
+    Dat hangt af van je behoefte:
+
+    - **Dagelijks:** Als je actuele cijfers nodig hebt
+    - **Wekelijks:** Voor regelmatige monitoring
+    - **Maandelijks:** Voor periodieke rapportages
+
+    Ga naar **🔄 Data Beheer** om nieuwe data op te halen.
     """)
 
 with st.expander("Kan ik de data exporteren?"):
     st.markdown("""
-    Ja! In de tabel kun je:
-    - De data kopiëren naar Excel (selecteer en Ctrl+C)
-    - Sorteren door op kolomkoppen te klikken
-    - Filteren via de sidebar links
+    Ja! Meerdere opties:
+
+    1. **Vanuit de tabel:** Selecteer en kopieer (Ctrl+C)
+    2. **Excel bestand:** De brondata staat in `data/<run_id>/coach_eligibility.xlsx`
+    3. **Sorteren:** Klik op kolomkoppen in de tabel
+    """)
+
+with st.expander("Hoe verander ik de status berekening?"):
+    st.markdown("""
+    In de sidebar onder **"⭐ Status Berekening"** kun je aanpassen:
+
+    - **Minimum deals voor Laag 2:** Standaard 14
+    - De Laag 3 drempel is automatisch de helft hiervan
+
+    De status wordt direct herberekend als je de slider aanpast.
     """)
 
 # ============================================================================
-# SECTION 8: SAMENVATTING
+# SECTION 10: SAMENVATTING
 # ============================================================================
 
 st.markdown("---")
-st.markdown("## 8. Samenvatting")
+st.markdown("## 10. Samenvatting")
 
 st.info("""
 **De belangrijkste punten:**
 
 1. **Status bepaalt geschiktheid** - Alleen Laag 2 en Laag 3 komen in aanmerking
-2. **Volume is belangrijk** - Minimaal 14 deals voor betrouwbare statistiek
-3. **Mediaan verschilt per periode** - 1m: 55.6%, 3m: 54.5%, 6m: 50.0%
+2. **Volume is belangrijk** - Minimum deals drempel is configureerbaar (standaard 14)
+3. **Mediaan is dynamisch** - Wordt berekend op basis van periode en filters
 4. **Grafieken lezen** - Rechtsboven in de scatter = beste coaches
-5. **Trends bekijken** - Vergelijk 1, 3 en 6 maanden voor patronen
+5. **Periode kiezen** - 1/3/6 maanden voor verschillende perspectieven
+6. **Data vernieuwen** - Via de 🔄 Data Beheer pagina
 """)
 
 # ============================================================================
