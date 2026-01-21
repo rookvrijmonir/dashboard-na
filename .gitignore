@@ -1,0 +1,25 @@
+# Virtual environment
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# Streamlit
+.streamlit/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (optional - remove if you want to track data)
+# data/

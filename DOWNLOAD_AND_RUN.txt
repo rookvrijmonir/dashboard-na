@@ -1,0 +1,216 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                                                                              ║
+║               🎯 COACH PERFORMANCE DASHBOARD - READY TO USE                  ║
+║                                                                              ║
+║                         BUILD IN CANVAS, RUN LOCALLY                         ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+📥 WHAT YOU HAVE
+
+You've received 8 complete files:
+
+  DOCUMENTATION (Read in this order):
+  ✅ DELIVERY_MANIFEST.txt         ← Full overview of delivery
+  ✅ 00_START_HERE.md              ← Quick summary
+  ✅ QUICK_START.md                ← 5-minute setup
+  ✅ FILE_STRUCTURE.md             ← Folder layout guide
+
+  APPLICATION (Copy to your computer):
+  ✅ dashboard_app.py              ← The entire Streamlit app
+  ✅ requirements.txt              ← Python dependencies
+  ✅ README.md                     ← Full user guide
+  ✅ IMPLEMENTATION_PLAN.md        ← Technical details
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🚀 FASTEST WAY TO GET RUNNING (Copy-Paste)
+
+Open your terminal and run these commands:
+
+  # 1. Create project folder
+  mkdir coach-dashboard
+  cd coach-dashboard
+
+  # 2. Copy all 5 app files here from your downloads
+  # (dashboard_app.py, requirements.txt, README.md, etc.)
+
+  # 3. Create data folder
+  mkdir data
+
+  # 4. Copy your 4 data files into data/ subfolder
+  # (coach_eligibility_20260121_195256.xlsx, mapping.xlsx, etc.)
+
+  # 5. Install dependencies
+  pip install -r requirements.txt
+
+  # 6. Run it!
+  streamlit run dashboard_app.py
+
+✨ DONE! Browser opens automatically at http://localhost:8501
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📖 READING ORDER
+
+For quick setup:
+  1. Read this file (DOWNLOAD_AND_RUN.txt)
+  2. Follow QUICK_START.md
+
+For complete understanding:
+  1. Start with 00_START_HERE.md
+  2. Then QUICK_START.md (setup)
+  3. Then README.md (features & usage)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+✅ WHAT THE DASHBOARD DOES
+
+Shows 6 interactive visualizations:
+
+  1. 📊 Histogram
+     - Distribution of smoothed 1-month win rates
+     - Red line = P50 benchmark (51.1%)
+
+  2. 📈 Bar Chart
+     - Coach counts by eligibility category
+     - Sorted by most to least
+
+  3. 🔍 Scatter Plot
+     - Deals vs win rate (colored by eligibility)
+     - X: # deals, Y: win rate %
+     - Red line: P50 benchmark
+
+  4. ⏰ Time Comparison
+     - Toggle between 1m, 3m, 6m periods
+     - See how distributions change
+
+  5. 📋 Trend Table
+     - All coaches + metrics (1m, 3m, 6m)
+     - Sortable columns
+
+  6. 📌 KPI Cards
+     - Top metrics: avg smoothed rate, avg deals, etc.
+
+PLUS 2 Interactive Filters:
+  - Eligibility selector (multiselect)
+  - Minimum deals slider
+
+═══════════════════════════════════════════════════════════════════════════════
+
+💻 SYSTEM REQUIREMENTS
+
+Python:    3.8 or higher (check: python --version)
+Pip:       Latest (check: pip --version)
+Space:     ~200 MB (for Python packages)
+OS:        Windows / Mac / Linux (all supported)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 YOUR 4 DATA FILES GO HERE
+
+When setting up locally, create this structure:
+
+  coach-dashboard/
+  ├── dashboard_app.py                        ← Python app
+  ├── requirements.txt                        ← Packages to install
+  ├── README.md                               ← Documentation
+  └── data/                                   ← CREATE THIS FOLDER
+      ├── coach_eligibility_20260121_195256.xlsx
+      ├── mapping.xlsx
+      ├── deals_flat.csv
+      └── owners.json
+
+THE MOST IMPORTANT THING:
+  ✓ Your 4 data files MUST be in a "data/" folder
+  ✓ The "data/" folder must be in same directory as dashboard_app.py
+  ✓ File names must be EXACT (case matters on Mac/Linux)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+⚙️ INSTALL PYTHON PACKAGES
+
+After creating folder structure, run:
+
+  pip install -r requirements.txt
+
+This installs:
+  - streamlit (web framework)
+  - pandas (data handling)
+  - plotly (interactive charts)
+  - openpyxl (Excel reading)
+  + a few others
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🚀 RUN THE DASHBOARD
+
+From your project folder:
+
+  streamlit run dashboard_app.py
+
+Wait 1-2 seconds for data to load, then:
+  ✨ Browser auto-opens at http://localhost:8501
+  ✨ Dashboard is interactive and ready to use
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎮 USING THE DASHBOARD
+
+Left sidebar has filters:
+  
+  1. Eligibility Filter
+     - Click to select which categories to show
+     - Default: all categories
+     
+  2. Minimum Deals Slider
+     - Set minimum # of deals (1-month)
+     - Default: 0 (show all)
+
+Charts update instantly when you change filters!
+
+═══════════════════════════════════════════════════════════════════════════════
+
+❓ TROUBLESHOOTING
+
+"Error loading data"
+  → Make sure data/ folder exists with all 4 files
+
+"ModuleNotFoundError"
+  → Run: pip install -r requirements.txt
+
+"Port 8501 already in use"
+  → Run: streamlit run dashboard_app.py --server.port 8502
+
+Blank dashboard
+  → Check filters in sidebar (reset to defaults)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📞 HELP
+
+If stuck:
+  1. Check QUICK_START.md for common issues
+  2. Check README.md troubleshooting section
+  3. Check FILE_STRUCTURE.md for file layout
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎉 YOU'RE READY!
+
+Everything is set up and documented. Just:
+  1. Download the 8 files
+  2. Follow QUICK_START.md steps 1-7
+  3. Enjoy your dashboard! 🚀
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Questions? All answers are in the 4 documentation files:
+  - 00_START_HERE.md
+  - QUICK_START.md
+  - README.md
+  - IMPLEMENTATION_PLAN.md
+
+Let's go! 💪
+
+═══════════════════════════════════════════════════════════════════════════════
