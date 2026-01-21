@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
@@ -12,14 +11,25 @@ import json
 # ============================================================================
 
 st.set_page_config(
-    page_title="Coach Performance Dashboard",
-    page_icon="📊",
+    page_title="Coach Prestatie Nationale Apotheek",
+    page_icon="💊",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-st.title("📊 Coach Performance Dashboard")
-st.markdown("Analyze coach metrics across 1-month, 3-month, and 6-month periods")
+st.title("💊 Coach Prestatie Nationale Apotheek")
+st.markdown("Bekijk coach prestaties over de afgelopen 1, 3 en 6 maanden")
+
+# Help sectie - GROOT EN DUIDELIJK
+st.markdown("""
+<div style='background-color: #d4edda; padding: 20px; border-radius: 10px; text-align: center; margin: 10px 0;'>
+    <h3 style='margin: 0; color: #155724;'>📖 HULP NODIG?</h3>
+    <p style='margin: 10px 0 0 0; color: #155724;'>
+        Klik links in het menu op <b>"📖 Uitleg"</b> voor een complete handleiding.
+        <br>Zie je geen menu? Klik op het pijltje <b>></b> linksboven.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # ============================================================================
 # DATA LOADING (CACHED)
@@ -30,6 +40,21 @@ def load_coach_data():
     """Load coaches data from Excel."""
     file_path = Path("data/coach_eligibility_20260121_195256.xlsx")
     df = pd.read_excel(file_path, sheet_name="Coaches")
+
+    # Filter uit: Nabellers, programma's, gestopte accounts, onbekenden
+    exclude_patterns = ['nabeller']
+    exclude_exact = [
+        'Rookvrij en Fitter Het Gooi',
+        '167331984',
+        'UNKNOWN',
+        'benVitaal Coaching',
+        'SportQube Algemeen'
+    ]
+
+    for pattern in exclude_patterns:
+        df = df[~df['Coachnaam'].str.lower().str.contains(pattern, na=False)]
+    df = df[~df['Coachnaam'].isin(exclude_exact)]
+
     return df
 
 @st.cache_data
@@ -39,33 +64,18 @@ def load_deal_class_summary():
     df = pd.read_excel(file_path, sheet_name="DealClassSummary")
     return df
 
-@st.cache_data
-def load_mapping():
-    """Load stage mapping."""
-    file_path = Path("data/mapping.xlsx")
-    df = pd.read_excel(file_path, sheet_name="stage_mapping")
-    return df
-
-@st.cache_data
-def load_owners():
-    """Load owner mapping."""
-    file_path = Path("data/owners.json")
-    with open(file_path, 'r') as f:
-        owners = json.load(f)
-    return owners
-
 # Load all data
 try:
     coaches_df = load_coach_data()
     summary_df = load_deal_class_summary()
-    mapping_df = load_mapping()
-    owners_dict = load_owners()
     data_loaded = True
 except Exception as e:
-    st.error(f"❌ Error loading data: {e}")
-    st.info("Make sure all data files are in the `data/` subfolder")
+    st.error(f"❌ Fout bij laden data: {e}")
+    st.info("Zorg dat alle databestanden in de `data/` map staan")
     data_loaded = False
     st.stop()
+
+# Mediaan wordt later berekend, na filters
 
 # ============================================================================
 # SIDEBAR: FILTERS
@@ -73,115 +83,368 @@ except Exception as e:
 
 st.sidebar.header("🎯 Filters")
 
-# Get unique eligibility values
-eligibility_options = sorted(coaches_df['eligibility'].unique())
-selected_eligibility = st.sidebar.multiselect(
-    "Coach Eligibility",
-    options=eligibility_options,
-    default=eligibility_options,
-    help="Filter by eligibility category"
+# ===================
+# PERIODE SELECTIE - BELANGRIJKSTE KEUZE
+# ===================
+st.sidebar.markdown("### 📅 Periode")
+st.sidebar.markdown("*Kies de periode voor ALLE grafieken en berekeningen*")
+
+periode_keuze = st.sidebar.radio(
+    "Selecteer periode",
+    options=["1 maand", "3 maanden", "6 maanden"],
+    index=0,
+    horizontal=True
 )
 
-# Deals slider
-min_deals_range = int(coaches_df['deals_1m'].min())
-max_deals_range = int(coaches_df['deals_1m'].max())
+# Map keuze naar kolommen
+periode_map = {
+    "1 maand": {"deals": "deals_1m", "winrate": "smoothed_1m", "label": "1 maand"},
+    "3 maanden": {"deals": "deals_3m", "winrate": "smoothed_3m", "label": "3 maanden"},
+    "6 maanden": {"deals": "deals_6m", "winrate": "smoothed_6m", "label": "6 maanden"}
+}
+
+deals_col = periode_map[periode_keuze]["deals"]
+winrate_col = periode_map[periode_keuze]["winrate"]
+periode_label = periode_map[periode_keuze]["label"]
+
+st.sidebar.success(f"📊 Alle data gebaseerd op: **{periode_label}**")
+
+st.sidebar.markdown("---")
+
+# ===================
+# COACHES UITSLUITEN
+# ===================
+st.sidebar.markdown("### 🚫 Coaches Uitsluiten")
+
+all_coaches = sorted(coaches_df['Coachnaam'].unique())
+
+excluded_coaches = st.sidebar.multiselect(
+    "Selecteer coaches om uit te sluiten",
+    options=all_coaches,
+    default=[],
+    help="Deze coaches worden volledig verwijderd uit alle grafieken en berekeningen"
+)
+
+if excluded_coaches:
+    coaches_df = coaches_df[~coaches_df['Coachnaam'].isin(excluded_coaches)].copy()
+    st.sidebar.info(f"🚫 {len(excluded_coaches)} coach(es) uitgesloten")
+
+st.sidebar.markdown("---")
+
+# ===================
+# TOP X% FILTER
+# ===================
+st.sidebar.markdown("### 🏆 Top Presteerders")
+
+top_percentage = st.sidebar.slider(
+    "Toon alleen top X%",
+    min_value=10,
+    max_value=100,
+    value=100,
+    step=5,
+    help=f"Toon alleen de beste X% coaches op basis van winstpercentage ({periode_label})"
+)
+
+if top_percentage < 100:
+    cutoff_value = coaches_df[winrate_col].quantile(1 - (top_percentage / 100))
+    coaches_before = len(coaches_df)
+    coaches_df = coaches_df[coaches_df[winrate_col] >= cutoff_value].copy()
+    coaches_after = len(coaches_df)
+    st.sidebar.info(f"📊 Toont {coaches_after} van {coaches_before} coaches\n\n**Minimum winst%:** {cutoff_value:.1f}%\n*(om in top {top_percentage}% te vallen)*")
+
+st.sidebar.markdown("---")
+
+# ===================
+# MINIMUM DEALS VOOR WEERGAVE
+# ===================
+st.sidebar.markdown("### 🎚️ Minimum Deals")
+
 min_deals = st.sidebar.slider(
-    "Minimum Deals (1-month)",
-    min_value=min_deals_range,
-    max_value=max_deals_range,
-    value=min_deals_range,
+    f"Minimum deals ({periode_label})",
+    min_value=0,
+    max_value=30,
+    value=0,
     step=1,
-    help="Show only coaches with at least this many deals in the last month"
+    help="Coaches met minder deals worden grijs getoond in de grafieken"
 )
 
-# Apply filters
-filtered_df = coaches_df[
-    (coaches_df['eligibility'].isin(selected_eligibility)) &
-    (coaches_df['deals_1m'] >= min_deals)
-].copy()
+st.sidebar.markdown("---")
+
+# ===================
+# MEDIAAN BEREKENING (voor geselecteerde periode)
+# ===================
+selected_median = coaches_df[winrate_col].median()
+
+st.sidebar.markdown(f"### 📊 Mediaan ({periode_label})")
+st.sidebar.metric("Mediaan winstpercentage", f"{selected_median:.1f}%")
+
+st.sidebar.markdown("---")
+
+# ===================
+# DYNAMISCHE STATUS BEREKENING
+# ===================
+st.sidebar.markdown("### ⭐ Status Berekening")
+st.sidebar.markdown(f"*Gebaseerd op {periode_label}*")
+
+laag2_threshold = st.sidebar.slider(
+    f"Minimum deals voor Laag 2",
+    min_value=1,
+    max_value=30,
+    value=14,
+    step=1,
+    help=f"Coaches met minimaal dit aantal deals ({periode_label}) EN boven de mediaan krijgen status 'Laag 2'"
+)
+
+with st.sidebar.expander("ℹ️ Hoe wordt status berekend?"):
+    st.markdown(f"""
+    **De regels (voor {periode_label}):**
+
+    ✅ **Laag 2** =
+    - Minimaal **{laag2_threshold}** deals
+    - Winstpercentage **≥ {selected_median:.1f}%** (mediaan)
+
+    ⭐ **Laag 3** =
+    - Minimaal **{laag2_threshold // 2}** deals
+    - Winstpercentage **≥ {selected_median * 0.8:.1f}%** (80% van mediaan)
+
+    ❌ **Uitsluiten** =
+    - Voldoet niet aan bovenstaande
+
+    ⚪ **Geen data** =
+    - 0 deals in {periode_label}
+    """)
+
+# Recalculate status dynamically based on threshold AND selected period
+def calculate_status(row):
+    deals = row[deals_col]
+    winrate = row[winrate_col]
+
+    if deals == 0:
+        return "⚪ Geen data"
+    elif deals >= laag2_threshold and winrate >= selected_median:
+        return "✅ Laag 2"
+    elif deals >= (laag2_threshold // 2) and winrate >= selected_median * 0.8:
+        return "⭐ Laag 3"
+    else:
+        return "❌ Uitsluiten"
+
+# Apply dynamic status calculation
+coaches_df['dynamic_status'] = coaches_df.apply(calculate_status, axis=1)
+
+# Show impact
+status_counts = coaches_df['dynamic_status'].value_counts()
+st.sidebar.markdown("**Verdeling met huidige instelling:**")
+for status, count in status_counts.items():
+    st.sidebar.markdown(f"- {status}: **{count}**")
+
+st.sidebar.markdown("---")
+
+# ===================
+# KEUZE: ORIGINELE OF DYNAMISCHE STATUS
+# ===================
+st.sidebar.markdown("### 📋 Status Weergave")
+use_dynamic = st.sidebar.checkbox(
+    "Gebruik dynamische status",
+    value=True,
+    help="Aan = status wordt herberekend op basis van je instellingen. Uit = originele status uit de data."
+)
+
+# Determine which status column to use
+status_column = 'dynamic_status' if use_dynamic else 'eligibility'
+
+# Get unique status values for filter
+status_options = sorted(coaches_df[status_column].unique())
+selected_statuses = st.sidebar.multiselect(
+    "Toon alleen deze statussen",
+    options=status_options,
+    default=status_options,
+    help="Filter op basis van coach status"
+)
+
+# Apply status filter
+filtered_df = coaches_df[coaches_df[status_column].isin(selected_statuses)].copy()
+
+# Add column to mark if coach meets minimum deals threshold (voor geselecteerde periode)
+filtered_df['meets_threshold'] = filtered_df[deals_col] >= min_deals
+filtered_df['display_status'] = filtered_df[status_column]
 
 # Display filter info
 st.sidebar.markdown("---")
-st.sidebar.markdown(f"### 📈 Filtered Results")
-st.sidebar.metric("Coaches shown", len(filtered_df))
-st.sidebar.metric("Total coaches", len(coaches_df))
+st.sidebar.markdown("### 📈 Resultaten")
+st.sidebar.metric("Coaches getoond", len(filtered_df))
+st.sidebar.metric("Waarvan boven drempel", len(filtered_df[filtered_df['meets_threshold']]))
 
-# ============================================================================
-# DATA QUALITY / SANITY CHECKS
-# ============================================================================
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("### 📋 Data Quality")
-
-col_qa1, col_qa2 = st.sidebar.columns(2)
-with col_qa1:
-    st.metric("P50 Smoothed 1m", f"{coaches_df['p50_smoothed_1m'].iloc[0]:.1f}%")
-with col_qa2:
-    st.metric("Data rows", len(coaches_df))
-
-with st.sidebar.expander("📊 Deal Class Summary"):
-    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+# Info over data filtering
+with st.sidebar.expander("ℹ️ Uitgefilterde data"):
+    st.markdown("""
+    **Automatisch verwijderd:**
+    - Nabellers (geen coaches)
+    - Rookvrij en Fitter Het Gooi
+    - 167331984 (onbekend)
+    - UNKNOWN
+    - benVitaal Coaching (gestopt)
+    - SportQube Algemeen (doorstuur)
+    """)
 
 # ============================================================================
 # MAIN METRICS (TOP CARDS)
 # ============================================================================
 
-st.markdown("### 📊 Overview Metrics")
+st.markdown("---")
+st.markdown(f"### 📊 Kerncijfers ({periode_label})")
+
+# Only calculate metrics for coaches above threshold
+threshold_df = filtered_df[filtered_df['meets_threshold']]
 
 col1, col2, col3, col4 = st.columns(4)
 
 with col1:
-    avg_smoothed = filtered_df['smoothed_1m'].mean()
-    st.metric("Avg Smoothed 1m", f"{avg_smoothed:.1f}%")
+    if len(threshold_df) > 0:
+        avg_smoothed = threshold_df[winrate_col].mean()
+        st.metric("Gem. winstpercentage", f"{avg_smoothed:.1f}%")
+    else:
+        st.metric("Gem. winstpercentage", "N/A")
 
 with col2:
-    avg_deals = filtered_df['deals_1m'].mean()
-    st.metric("Avg Deals 1m", f"{avg_deals:.1f}")
+    if len(threshold_df) > 0:
+        avg_deals = threshold_df[deals_col].mean()
+        st.metric(f"Gem. deals", f"{avg_deals:.1f}")
+    else:
+        st.metric(f"Gem. deals", "N/A")
 
 with col3:
-    avg_wr = filtered_df['rate_1m'].mean()
-    st.metric("Avg Win Rate 1m", f"{avg_wr:.1f}%")
+    st.metric("Mediaan", f"{selected_median:.1f}%")
 
 with col4:
-    p50 = coaches_df['p50_smoothed_1m'].iloc[0]
-    pct_above = (filtered_df['smoothed_1m'] >= p50).sum() / len(filtered_df) * 100 if len(filtered_df) > 0 else 0
-    st.metric("% Above P50", f"{pct_above:.0f}%")
+    if len(threshold_df) > 0:
+        pct_above = (threshold_df[winrate_col] >= selected_median).sum() / len(threshold_df) * 100
+        st.metric("% boven mediaan", f"{pct_above:.0f}%")
+    else:
+        st.metric("% boven mediaan", "N/A")
 
 # ============================================================================
-# SECTION 1: HISTOGRAM WITH PERCENTILE LINE
+# SECTION 1: SCATTERPLOT - DEALS VS WINSTPERCENTAGE (GESELECTEERDE PERIODE)
 # ============================================================================
 
 st.markdown("---")
-st.markdown("### 1️⃣ Distribution of 1-Month Smoothed Win Rate")
+st.markdown(f"## 1️⃣ Deals vs Winstpercentage ({periode_label})")
+st.markdown(f"""
+*Elke stip is een coach. De **rode lijn** toont de mediaan ({selected_median:.1f}%).
+De **blauwe lijn** toont je ingestelde minimum ({min_deals} deals).
+Coaches onder de minimum worden lichter getoond.*
+""")
 
-p50_value = coaches_df['p50_smoothed_1m'].iloc[0]
+# Split data into above and below threshold
+above_threshold = filtered_df[filtered_df[deals_col] >= min_deals]
+below_threshold = filtered_df[filtered_df[deals_col] < min_deals]
+
+fig_scatter = go.Figure()
+
+# Add coaches below threshold (gray, smaller)
+if len(below_threshold) > 0:
+    fig_scatter.add_trace(go.Scatter(
+        x=below_threshold[deals_col],
+        y=below_threshold[winrate_col],
+        mode='markers',
+        name=f'Onder {min_deals} deals',
+        marker=dict(
+            size=8,
+            color='lightgray',
+            opacity=0.5
+        ),
+        text=below_threshold['Coachnaam'],
+        hovertemplate='<b>%{text}</b><br>Deals: %{x}<br>Winst: %{y:.1f}%<br><i>(onder drempel)</i><extra></extra>'
+    ))
+
+# Add coaches above threshold (colored by status)
+if len(above_threshold) > 0:
+    for status in above_threshold['display_status'].unique():
+        status_df = above_threshold[above_threshold['display_status'] == status]
+        fig_scatter.add_trace(go.Scatter(
+            x=status_df[deals_col],
+            y=status_df[winrate_col],
+            mode='markers',
+            name=status,
+            marker=dict(size=12),
+            text=status_df['Coachnaam'],
+            hovertemplate='<b>%{text}</b><br>Deals: %{x}<br>Winst: %{y:.1f}%<br>Status: ' + status + '<extra></extra>'
+        ))
+
+# Add median line (horizontal)
+fig_scatter.add_hline(
+    y=selected_median,
+    line_dash="dash",
+    line_color="red",
+    line_width=2,
+    annotation_text=f"Mediaan = {selected_median:.1f}%",
+    annotation_position="right"
+)
+
+# Add minimum deals line (vertical)
+if min_deals > 0:
+    fig_scatter.add_vline(
+        x=min_deals,
+        line_dash="dot",
+        line_color="blue",
+        line_width=2,
+        annotation_text=f"Min. {min_deals} deals",
+        annotation_position="top"
+    )
+
+fig_scatter.update_layout(
+    title=f"Deals vs Winstpercentage ({periode_label})",
+    xaxis_title="Aantal Deals",
+    yaxis_title="Winstpercentage (%)",
+    height=550,
+    hovermode='closest',
+    plot_bgcolor='rgba(240,240,240,0.5)',
+    legend=dict(
+        orientation="h",
+        yanchor="bottom",
+        y=1.02,
+        xanchor="right",
+        x=1
+    )
+)
+
+st.plotly_chart(fig_scatter, use_container_width=True)
+
+# ============================================================================
+# SECTION 2: HISTOGRAM - VERDELING WINSTPERCENTAGE (GESELECTEERDE PERIODE)
+# ============================================================================
+
+st.markdown("---")
+st.markdown(f"## 2️⃣ Verdeling Winstpercentage ({periode_label})")
+st.markdown(f"*De **rode lijn** toont de mediaan ({selected_median:.1f}%). Links = onder gemiddeld, rechts = boven gemiddeld.*")
+
+# Only include coaches above threshold
+chart_data = filtered_df[filtered_df['meets_threshold']][winrate_col]
 
 fig_hist = go.Figure()
 
-# Add histogram
 fig_hist.add_trace(go.Histogram(
-    x=filtered_df['smoothed_1m'],
-    nbinsx=25,
-    name='Coaches',
+    x=chart_data,
+    nbinsx=20,
+    name=periode_label,
     marker_color='rgba(31, 119, 180, 0.7)',
-    hovertemplate='<b>Win Rate Range</b>: %{x}<br><b>Count</b>: %{y}<extra></extra>'
+    hovertemplate=f'<b>{periode_label}</b><br>Winstpercentage: %{{x:.1f}}%<br>Aantal coaches: %{{y}}<extra></extra>'
 ))
 
-# Add percentile line
+# Mediaan lijn
 fig_hist.add_vline(
-    x=p50_value,
+    x=selected_median,
     line_dash="dash",
     line_color="red",
-    annotation_text=f"P50 = {p50_value:.1f}%",
+    line_width=2,
+    annotation_text=f"Mediaan = {selected_median:.1f}%",
     annotation_position="top right"
 )
 
 fig_hist.update_layout(
-    title="Distribution of Smoothed Win Rate (1-month)",
-    xaxis_title="Smoothed Win Rate (%)",
-    yaxis_title="Number of Coaches",
-    hovermode='x unified',
-    height=400,
+    title=f"Verdeling Winstpercentage ({periode_label})",
+    xaxis_title="Winstpercentage (%)",
+    yaxis_title="Aantal Coaches",
+    height=450,
     showlegend=False,
     plot_bgcolor='rgba(240,240,240,0.5)'
 )
@@ -189,202 +452,84 @@ fig_hist.update_layout(
 st.plotly_chart(fig_hist, use_container_width=True)
 
 # ============================================================================
-# SECTION 2: BAR CHART - ELIGIBILITY DISTRIBUTION
+# SECTION 3: STATUS VERDELING
 # ============================================================================
 
 st.markdown("---")
-st.markdown("### 2️⃣ Coach Distribution by Eligibility")
+st.markdown("## 3️⃣ Aantal Coaches per Status")
 
-eligibility_counts = filtered_df['eligibility'].value_counts().reset_index()
-eligibility_counts.columns = ['eligibility', 'count']
-eligibility_counts = eligibility_counts.sort_values('count', ascending=False)
+status_counts_chart = filtered_df[filtered_df['meets_threshold']]['display_status'].value_counts().reset_index()
+status_counts_chart.columns = ['Status', 'Aantal']
 
 fig_bar = px.bar(
-    eligibility_counts,
-    x='eligibility',
-    y='count',
-    labels={'eligibility': 'Eligibility', 'count': 'Number of Coaches'},
-    text='count',
-    color='count',
-    color_continuous_scale='Blues',
-    hover_name='eligibility'
+    status_counts_chart,
+    x='Status',
+    y='Aantal',
+    text='Aantal',
+    color='Aantal',
+    color_continuous_scale='Blues'
 )
 
 fig_bar.update_traces(
     textposition='outside',
-    texttemplate='%{text}',
-    hovertemplate='<b>%{x}</b><br>Coaches: %{y}<extra></extra>'
+    hovertemplate='<b>%{x}</b><br>Aantal coaches: %{y}<extra></extra>'
 )
 
 fig_bar.update_layout(
-    title="Coach Distribution by Eligibility",
-    xaxis_title="Eligibility Category",
-    yaxis_title="Number of Coaches",
+    title="Aantal Coaches per Status",
+    xaxis_title="Status",
+    yaxis_title="Aantal Coaches",
     height=400,
-    showlegend=False,
-    hovermode='x'
+    showlegend=False
 )
 
 st.plotly_chart(fig_bar, use_container_width=True)
 
 # ============================================================================
-# SECTION 3: SCATTER - DEALS VS SMOOTHED WIN RATE
+# SECTION 4: TABEL MET ALLE COACHES
 # ============================================================================
 
 st.markdown("---")
-st.markdown("### 3️⃣ Deals vs Smoothed Win Rate (Colored by Eligibility)")
+st.markdown(f"## 📋 Overzicht Alle Coaches ({periode_label})")
+st.markdown("*Gesorteerd op winstpercentage (hoogste eerst). Klik op een kolomkop om anders te sorteren.*")
 
-fig_scatter = px.scatter(
-    filtered_df,
-    x='deals_1m',
-    y='smoothed_1m',
-    color='eligibility',
-    hover_name='Coachnaam',
-    hover_data={
-        'coach_id': True,
-        'deals_1m': ':.0f',
-        'smoothed_1m': ':.1f',
-        'rate_1m': ':.1f',
-        'eligibility': True
-    },
-    labels={
-        'deals_1m': 'Number of Deals (1-month)',
-        'smoothed_1m': 'Smoothed Win Rate (%)',
-        'eligibility': 'Eligibility'
-    },
-    title="Deals vs Smoothed Win Rate (1-month)",
-    height=500
-)
+# Legenda
+st.markdown(f"""
+<div style='background-color: #f0f2f6; padding: 10px; border-radius: 5px; margin-bottom: 15px;'>
+<b>Geselecteerde periode:</b> {periode_label} | <b>Mediaan:</b> {selected_median:.1f}% | ⚪ = onder minimum deals drempel
+</div>
+""", unsafe_allow_html=True)
 
-# Add p50 reference line
-fig_scatter.add_hline(
-    y=p50_value,
-    line_dash="dash",
-    line_color="red",
-    annotation_text=f"P50 = {p50_value:.1f}%",
-    annotation_position="right"
-)
-
-fig_scatter.update_layout(
-    hovermode='closest',
-    plot_bgcolor='rgba(240,240,240,0.5)'
-)
-
-st.plotly_chart(fig_scatter, use_container_width=True)
-
-# ============================================================================
-# SECTION 4: TIME COMPARISON (1m vs 3m vs 6m)
-# ============================================================================
-
-st.markdown("---")
-st.markdown("### 4️⃣ Comparison: 1-Month vs 3-Month vs 6-Month")
-
-# Create small multiple histograms
-fig_multi = go.Figure()
-
-periods = [
-    ('smoothed_1m', '1-Month'),
-    ('smoothed_3m', '3-Month'),
-    ('smoothed_6m', '6-Month')
+# Prepare table data - alleen geselecteerde periode
+table_cols = [
+    'Coachnaam', 'display_status',
+    deals_col, winrate_col,
+    'meets_threshold'
 ]
 
-for i, (col, label) in enumerate(periods):
-    fig_multi.add_trace(go.Histogram(
-        x=filtered_df[col],
-        name=label,
-        nbinsx=20,
-        visible=(i == 0),  # Show only first by default
-        hovertemplate=f'<b>{label}</b><br>Win Rate: %{{x:.1f}}%<br>Count: %{{y}}<extra></extra>'
-    ))
+table_df = filtered_df[table_cols].copy()
+table_df = table_df.sort_values(winrate_col, ascending=False)
 
-# Create buttons to switch between periods
-buttons = []
-for i, (col, label) in enumerate(periods):
-    visible = [False] * len(periods)
-    visible[i] = True
-    buttons.append(
-        dict(
-            label=label,
-            method='update',
-            args=[
-                {'visible': visible},
-                {'title': f'Distribution of Smoothed Win Rate ({label})'}
-            ]
-        )
-    )
-
-fig_multi.update_layout(
-    updatemenus=[
-        dict(
-            active=0,
-            buttons=buttons,
-            direction="left",
-            pad={"r": 10, "t": 10},
-            showactive=True,
-            x=0.0,
-            xanchor="left",
-            y=1.15,
-            yanchor="top"
-        )
-    ],
-    title="Distribution of Smoothed Win Rate (1-Month)",
-    xaxis_title="Smoothed Win Rate (%)",
-    yaxis_title="Number of Coaches",
-    height=400,
-    hovermode='x unified',
-    plot_bgcolor='rgba(240,240,240,0.5)',
-    showlegend=False
-)
-
-st.plotly_chart(fig_multi, use_container_width=True)
-
-# ============================================================================
-# SECTION 5: COMPARATIVE TABLE (1m vs 3m vs 6m)
-# ============================================================================
-
-st.markdown("---")
-st.markdown("### 📋 Trends: 1m vs 3m vs 6m")
-
-trend_cols = [
-    'coach_id',
-    'Coachnaam',
-    'deals_1m', 'smoothed_1m',
-    'deals_3m', 'smoothed_3m',
-    'deals_6m', 'smoothed_6m',
-    'eligibility'
-]
-
-trend_df = filtered_df[trend_cols].copy()
-trend_df = trend_df.sort_values('smoothed_1m', ascending=False)
-
-# Format for display
-display_df = trend_df.copy()
-display_df['smoothed_1m'] = display_df['smoothed_1m'].apply(lambda x: f"{x:.1f}%")
-display_df['smoothed_3m'] = display_df['smoothed_3m'].apply(lambda x: f"{x:.1f}%")
-display_df['smoothed_6m'] = display_df['smoothed_6m'].apply(lambda x: f"{x:.1f}%")
-
-display_df = display_df.rename(columns={
-    'coach_id': 'Coach ID',
-    'Coachnaam': 'Coach Name',
-    'deals_1m': 'Deals (1m)',
-    'smoothed_1m': 'Win Rate (1m)',
-    'deals_3m': 'Deals (3m)',
-    'smoothed_3m': 'Win Rate (3m)',
-    'deals_6m': 'Deals (6m)',
-    'smoothed_6m': 'Win Rate (6m)',
-    'eligibility': 'Eligibility'
+# Rename columns dynamisch
+table_df = table_df.rename(columns={
+    'Coachnaam': 'Coach',
+    'display_status': 'Status',
+    deals_col: 'Deals',
+    winrate_col: 'Winst%',
+    'meets_threshold': 'Boven drempel'
 })
 
 st.dataframe(
-    display_df,
+    table_df,
     use_container_width=True,
     hide_index=True,
+    height=600,
     column_config={
-        "Coach ID": st.column_config.NumberColumn(format="%.0f"),
-        "Coach Name": st.column_config.TextColumn(width="medium"),
-        "Deals (1m)": st.column_config.NumberColumn(format="%.0f"),
-        "Deals (3m)": st.column_config.NumberColumn(format="%.0f"),
-        "Deals (6m)": st.column_config.NumberColumn(format="%.0f"),
+        "Coach": st.column_config.TextColumn(width="large"),
+        "Status": st.column_config.TextColumn(width="small"),
+        "Deals": st.column_config.NumberColumn(format="%d", help=f"Aantal deals ({periode_label})"),
+        "Winst%": st.column_config.ProgressColumn(format="%.1f%%", min_value=0, max_value=100, help=f"Winstpercentage ({periode_label})"),
+        "Boven drempel": st.column_config.CheckboxColumn(help=f"✅ = meer dan {min_deals} deals")
     }
 )
 
@@ -394,8 +539,9 @@ st.dataframe(
 
 st.markdown("---")
 st.markdown("""
-<div style='text-align: center; color: gray; font-size: 0.8em;'>
-    <p>📊 Coach Performance Dashboard | Data as of 2026-01-21</p>
-    <p>No external API calls | All data from local files</p>
+<div style='text-align: center; color: gray; font-size: 0.9em;'>
+    <p>💊 <b>Coach Prestatie Dashboard - Nationale Apotheek</b></p>
+    <p>Data van 21-01-2026 | Alle data komt uit lokale bestanden</p>
+    <p>📖 Klik op <b>Uitleg</b> in het linkermenu voor hulp</p>
 </div>
 """, unsafe_allow_html=True)
