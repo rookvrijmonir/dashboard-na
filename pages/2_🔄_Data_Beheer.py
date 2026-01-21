@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -45,51 +46,62 @@ def save_runs(runs_data: dict):
 
 
 def scan_existing_runs() -> list:
-    """Scan data folder for existing eligibility files and build run list."""
+    """Scan data folder for existing run directories."""
     runs = []
     if not DATA_DIR.is_dir():
         return runs
 
-    for f in DATA_DIR.glob("coach_eligibility_*.xlsx"):
-        # Parse filename: coach_eligibility_YYYYMMDD_HHMMSS.xlsx
+    # Look for directories with run_id pattern (YYYYMMDD_HHMMSS)
+    for d in DATA_DIR.iterdir():
+        if not d.is_dir():
+            continue
+        if len(d.name) != 15 or "_" not in d.name:
+            continue
+
         try:
-            parts = f.stem.split("_")
-            if len(parts) >= 4:
-                date_str = parts[2]  # YYYYMMDD
-                time_str = parts[3]  # HHMMSS
+            # Parse datetime from folder name
+            date_str = d.name[:8]  # YYYYMMDD
+            time_str = d.name[9:]  # HHMMSS
+            dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
 
-                # Parse datetime
-                dt = datetime.strptime(f"{date_str}_{time_str}", "%Y%m%d_%H%M%S")
+            # Check for required files
+            eligibility_file = d / "coach_eligibility.xlsx"
+            enums_file = d / "enums.xlsx"
 
-                # Get file stats
-                stat = f.stat()
+            if not eligibility_file.is_file():
+                continue
 
-                # Try to get coach count from file
-                try:
-                    df = pd.read_excel(f, sheet_name="Coaches")
-                    coach_count = len(df)
-                except:
-                    coach_count = None
+            # Get coach count
+            try:
+                df = pd.read_excel(eligibility_file, sheet_name="Coaches")
+                coach_count = len(df)
+            except:
+                coach_count = None
 
-                runs.append({
-                    "filename": f.name,
-                    "filepath": str(f),
-                    "run_id": f"{date_str}_{time_str}",
-                    "datetime": dt.isoformat(),
-                    "datetime_display": dt.strftime("%d-%m-%Y %H:%M:%S"),
-                    "size_kb": round(stat.st_size / 1024, 1),
-                    "coach_count": coach_count
-                })
+            # Get folder size
+            total_size = sum(f.stat().st_size for f in d.glob("*") if f.is_file())
+
+            runs.append({
+                "run_id": d.name,
+                "folder": str(d),
+                "datetime": dt.isoformat(),
+                "datetime_display": dt.strftime("%d-%m-%Y %H:%M:%S"),
+                "date_display": dt.strftime("%d-%m-%Y"),
+                "time_display": dt.strftime("%H:%M:%S"),
+                "size_kb": round(total_size / 1024, 1),
+                "coach_count": coach_count,
+                "has_enums": enums_file.is_file()
+            })
         except Exception as e:
             continue
 
     # Sort by datetime, newest first
-    runs.sort(key=lambda x: x["datetime"], reverse=True)
+    runs.sort(key=lambda x: x["run_id"], reverse=True)
     return runs
 
 
 def sync_runs_file():
-    """Sync runs.json with actual files in data folder."""
+    """Sync runs.json with actual folders in data directory."""
     runs_data = load_runs()
     scanned = scan_existing_runs()
 
@@ -124,30 +136,17 @@ def check_env_file() -> bool:
 def run_etl_with_progress(refresh_all: bool = True):
     """Run ETL scripts with progress updates in Streamlit."""
     from etl.fetch_hubspot import (
-        Config, Workflow, ensure_dirs, load_dotenv, utc_now_run_id
+        Config, Workflow, ensure_dirs, load_dotenv, utc_now_run_id,
+        CACHE_DIR as FETCH_CACHE_DIR, DATA_DIR as FETCH_DATA_DIR
     )
     from etl.calculate_metrics import (
-        main as calculate_metrics_main,
+        calculate_for_run,
         load_or_fetch_owners,
-        compute_metrics,
-        determine_eligibility,
-        load_mapping,
-        build_default_stage_mapping,
-        parse_iso,
-        parse_bool_str,
-        safe_str,
-        PIPELINE_NABELLER,
-        STAGE_TIJDELIJK_STOPPEN,
-        CACHE_DIR as METRICS_CACHE_DIR,
-        OUTPUT_DIR as METRICS_OUTPUT_DIR,
-        run_id as metrics_run_id,
-        newest_file,
-        file_nonempty
+        DATA_DIR as METRICS_DATA_DIR
     )
     import logging
 
     # Setup
-    ensure_dirs()
     load_dotenv()
 
     pat = os.environ.get("HUBSPOT_PAT", "").strip()
@@ -173,6 +172,9 @@ def run_etl_with_progress(refresh_all: bool = True):
 
     try:
         wf = Workflow(cfg, run_id, logger)
+
+        with details_container:
+            st.info(f"📁 Output folder: `data/{run_id}/`")
 
         # Step 1: Contacts
         status_text.markdown("**Stap 1/5:** Contacten ophalen uit HubSpot...")
@@ -210,97 +212,28 @@ def run_etl_with_progress(refresh_all: bool = True):
         status_text.markdown("**Stap 5/5:** Metrics berekenen...")
         progress_bar.progress(80)
 
-        # Load enums and create mapping
-        enums_file = newest_file("enums_*.xlsx", METRICS_OUTPUT_DIR)
-        stages_df = pd.read_excel(enums_file, sheet_name="Stages")
-
-        mapping_path = METRICS_OUTPUT_DIR / "mapping.xlsx"
-        if not mapping_path.is_file():
-            mapping_df = build_default_stage_mapping(stages_df)
-            with pd.ExcelWriter(mapping_path, engine="openpyxl") as w:
-                mapping_df.to_excel(w, sheet_name="stage_mapping", index=False)
-
-        stage_map = load_mapping(mapping_path)
-
-        # Process deals
-        deals_path = METRICS_CACHE_DIR / "deals_raw.json"
-        deals_raw = json.load(open(deals_path, "r", encoding="utf-8"))
-
-        rows = []
-        for d in deals_raw:
-            props = d.get("properties", {}) or {}
-            deal_id = safe_str(d.get("id"))
-            coach_id = safe_str(props.get("hubspot_owner_id"))
-            pipeline = safe_str(props.get("pipeline"))
-            dealstage = safe_str(props.get("dealstage"))
-
-            created_dt = parse_iso(props.get("createdate"))
-            if created_dt is None:
-                continue
-
-            cls = stage_map.get((pipeline, dealstage), "")
-            if not cls:
-                is_lost = parse_bool_str(props.get("hs_is_closed_lost"))
-                is_won = parse_bool_str(props.get("hs_is_closed_won"))
-                if dealstage == STAGE_TIJDELIJK_STOPPEN:
-                    cls = "LOST"
-                elif pipeline == PIPELINE_NABELLER and is_won:
-                    cls = "NABELLER_HANDOFF"
-                elif is_lost:
-                    cls = "LOST"
-                elif is_won:
-                    cls = "WON"
-                else:
-                    cls = "OPEN"
-
-            if dealstage == STAGE_TIJDELIJK_STOPPEN:
-                cls = "LOST"
-
-            rows.append({
-                "deal_id": deal_id,
-                "coach_id": coach_id if coach_id else "UNKNOWN",
-                "pipeline": pipeline,
-                "dealstage": dealstage,
-                "class": cls,
-                "created_dt": created_dt,
-            })
-
-        deals_df = pd.DataFrame(rows)
-        metrics_df = compute_metrics(deals_df)
-        final_df = determine_eligibility(metrics_df)
-
-        # Get owners
-        owners = load_or_fetch_owners(refresh=refresh_all)
-        if owners:
-            final_df.insert(1, "Coachnaam", final_df["coach_id"].astype(str).map(lambda x: owners.get(x, "UNKNOWN")))
-        else:
-            final_df.insert(1, "Coachnaam", "UNKNOWN")
-
-        progress_bar.progress(95)
-
-        # Save output
-        output_run_id = metrics_run_id()
-        out_path = METRICS_OUTPUT_DIR / f"coach_eligibility_{output_run_id}.xlsx"
-
-        with pd.ExcelWriter(out_path, engine="openpyxl") as w:
-            final_df.to_excel(w, sheet_name="Coaches", index=False)
-            summary = deals_df.groupby(["pipeline", "class"]).size().reset_index(name="count")
-            summary.to_excel(w, sheet_name="DealClassSummary", index=False)
-            if owners:
-                owners_df = pd.DataFrame([{"coach_id": k, "Coachnaam": v} for k, v in sorted(owners.items())])
-                owners_df.to_excel(w, sheet_name="Owners", index=False)
+        output_path = calculate_for_run(run_id, refresh_owners=refresh_all)
 
         progress_bar.progress(100)
         status_text.markdown("**Voltooid!**")
 
+        # Get coach count from output
+        try:
+            df = pd.read_excel(output_path, sheet_name="Coaches")
+            coach_count = len(df)
+        except:
+            coach_count = "?"
+
         with details_container:
-            st.success(f"✓ {len(final_df)} coaches verwerkt")
-            st.success(f"✓ Output: {out_path.name}")
+            st.success(f"✓ {coach_count} coaches verwerkt")
+            st.success(f"✓ Output: `data/{run_id}/coach_eligibility.xlsx`")
 
-        # Sync runs file
-        sync_runs_file()
+        # Sync runs file and select new run
+        runs_data = sync_runs_file()
+        runs_data["selected"] = run_id
+        save_runs(runs_data)
 
-        return out_path.name
+        return run_id
 
     except Exception as e:
         st.error(f"❌ Fout tijdens ETL: {str(e)}")
@@ -321,7 +254,7 @@ st.markdown("## 📊 Actieve Dataset")
 if runs_data["runs"]:
     # Create dropdown options
     run_options = {
-        f"{r['datetime_display']} ({r['coach_count'] or '?'} coaches, {r['size_kb']} KB)": r["run_id"]
+        f"{r['datetime_display']} - {r['coach_count'] or '?'} coaches ({r['size_kb']} KB)": r["run_id"]
         for r in runs_data["runs"]
     }
 
@@ -346,19 +279,23 @@ if runs_data["runs"]:
     if new_selected != runs_data["selected"]:
         runs_data["selected"] = new_selected
         save_runs(runs_data)
-        st.success(f"✓ Dataset gewijzigd naar {selected_label}")
+        st.success(f"✓ Dataset gewijzigd!")
         st.rerun()
 
     # Show current selection details
     current_run = next((r for r in runs_data["runs"] if r["run_id"] == runs_data["selected"]), None)
     if current_run:
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Datum", current_run["datetime_display"].split(" ")[0])
+            st.metric("Datum", current_run["date_display"])
         with col2:
-            st.metric("Tijd", current_run["datetime_display"].split(" ")[1])
+            st.metric("Tijd", current_run["time_display"])
         with col3:
             st.metric("Coaches", current_run["coach_count"] or "?")
+        with col4:
+            st.metric("Grootte", f"{current_run['size_kb']} KB")
+
+        st.caption(f"📁 Folder: `data/{current_run['run_id']}/`")
 else:
     st.warning("⚠️ Geen datasets gevonden. Gebruik de knop hieronder om data op te halen.")
 
@@ -382,8 +319,8 @@ else:
     st.success("✓ HubSpot configuratie gevonden")
 
     st.markdown("""
-    Klik op de knop om verse data op te halen uit HubSpot. Dit kan enkele minuten duren
-    afhankelijk van de hoeveelheid data.
+    Klik op de knop om verse data op te halen uit HubSpot.
+    Elke run wordt opgeslagen in een aparte map zodat je kunt vergelijken.
     """)
 
     col1, col2 = st.columns([1, 2])
@@ -397,8 +334,7 @@ else:
 
             if result:
                 st.balloons()
-                st.success(f"✅ Data succesvol opgehaald: {result}")
-                st.markdown("**Ververs de pagina om de nieuwe dataset te selecteren.**")
+                st.success(f"✅ Nieuwe dataset aangemaakt: `{result}`")
                 time.sleep(2)
                 st.rerun()
 
@@ -410,48 +346,72 @@ else:
         3. Deal details ophalen
         4. Pipeline configuratie laden
         5. Metrics berekenen en opslaan
+
+        **Output:** `data/YYYYMMDD_HHMMSS/`
         """)
 
 # Section 3: Run History
 st.markdown("---")
-st.markdown("## 📜 Run Geschiedenis")
+st.markdown("## 📜 Beschikbare Runs")
 
 if runs_data["runs"]:
-    history_df = pd.DataFrame(runs_data["runs"])
-    history_df = history_df[["datetime_display", "coach_count", "size_kb", "filename"]]
-    history_df.columns = ["Datum/Tijd", "Coaches", "Grootte (KB)", "Bestand"]
+    # Show as nice cards/table
+    for run in runs_data["runs"]:
+        is_selected = run["run_id"] == runs_data["selected"]
+        icon = "✅" if is_selected else "📁"
 
-    st.dataframe(
-        history_df,
-        use_container_width=True,
-        hide_index=True
-    )
+        with st.expander(f"{icon} {run['datetime_display']} - {run['coach_count'] or '?'} coaches", expanded=is_selected):
+            col1, col2, col3 = st.columns([2, 2, 1])
 
-    # Option to delete old runs
-    with st.expander("🗑️ Oude runs verwijderen"):
-        st.warning("Let op: verwijderde bestanden kunnen niet worden hersteld!")
+            with col1:
+                st.markdown(f"**Run ID:** `{run['run_id']}`")
+                st.markdown(f"**Folder:** `data/{run['run_id']}/`")
 
-        if len(runs_data["runs"]) > 1:
-            runs_to_delete = st.multiselect(
-                "Selecteer runs om te verwijderen",
-                options=[r["filename"] for r in runs_data["runs"][1:]],  # Exclude newest
-                help="De nieuwste run kan niet worden verwijderd"
-            )
+            with col2:
+                st.markdown(f"**Coaches:** {run['coach_count'] or 'Onbekend'}")
+                st.markdown(f"**Grootte:** {run['size_kb']} KB")
 
-            if runs_to_delete and st.button("🗑️ Verwijderen", type="secondary"):
-                for filename in runs_to_delete:
-                    filepath = DATA_DIR / filename
-                    if filepath.is_file():
-                        filepath.unlink()
-                        st.success(f"Verwijderd: {filename}")
+            with col3:
+                if not is_selected:
+                    if st.button("Selecteer", key=f"select_{run['run_id']}"):
+                        runs_data["selected"] = run["run_id"]
+                        save_runs(runs_data)
+                        st.rerun()
 
-                sync_runs_file()
-                time.sleep(1)
-                st.rerun()
-        else:
-            st.info("Er is maar één run beschikbaar.")
+                    if st.button("🗑️", key=f"delete_{run['run_id']}", help="Verwijder deze run"):
+                        folder_path = Path(run["folder"])
+                        if folder_path.is_dir():
+                            shutil.rmtree(folder_path)
+                            st.success(f"Verwijderd: {run['run_id']}")
+                            time.sleep(1)
+                            st.rerun()
+                else:
+                    st.markdown("*Actief*")
+
+    st.caption(f"Totaal: {len(runs_data['runs'])} runs")
 else:
     st.info("Nog geen runs beschikbaar. Haal eerst data op.")
+
+# Section 4: Folder Structure Info
+st.markdown("---")
+with st.expander("ℹ️ Folder Structuur"):
+    st.markdown("""
+    ```
+    data/
+    ├── runs.json              # Run configuratie
+    ├── mapping.xlsx           # Stage mapping (gedeeld)
+    ├── 20260121_195256/       # Run folder
+    │   ├── coach_eligibility.xlsx
+    │   └── enums.xlsx
+    └── 20260122_103000/       # Andere run
+        ├── coach_eligibility.xlsx
+        └── enums.xlsx
+    ```
+
+    Elke run heeft zijn eigen folder met:
+    - `coach_eligibility.xlsx` - Coach metrics en eligibility
+    - `enums.xlsx` - Pipeline en stage configuratie
+    """)
 
 # Footer
 st.markdown("---")

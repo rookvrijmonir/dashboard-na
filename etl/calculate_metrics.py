@@ -7,25 +7,25 @@ Adapted from conversie-analyse/metric.py
 
 Inputs:
 - etl/cache/deals_raw.json
-- data/enums_*.xlsx (latest)
+- data/<run_id>/enums.xlsx
 
 Outputs:
-- data/mapping.xlsx (created if missing)
+- data/mapping.xlsx (shared across runs)
 - etl/cache/owners.json
-- data/coach_eligibility_<RUNID>.xlsx
+- data/<run_id>/coach_eligibility.xlsx
 
-Run with: python etl/calculate_metrics.py
+Run with: python etl/calculate_metrics.py [run_id]
 """
 
 from __future__ import annotations
 
 import os
+import sys
 import json
 import time
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 
 import pandas as pd
 import requests
@@ -33,7 +33,7 @@ import requests
 # Project paths
 PROJECT_ROOT = Path(__file__).parent.parent
 CACHE_DIR = PROJECT_ROOT / "etl" / "cache"
-OUTPUT_DIR = PROJECT_ROOT / "data"
+DATA_DIR = PROJECT_ROOT / "data"
 
 # Config
 PIPELINE_STATUS_BEGELEIDING = "15413220"
@@ -50,17 +50,32 @@ def run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
-def ensure_dirs() -> None:
+def ensure_dirs(run_id: str = None) -> Path:
+    """Ensure directories exist. Returns run output dir if run_id provided."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    if run_id:
+        run_dir = DATA_DIR / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir
+    return DATA_DIR
 
 
-def newest_file(pattern: str, directory: Path) -> Optional[Path]:
-    files = list(directory.glob(pattern))
-    if not files:
+def get_latest_run_dir() -> Optional[Path]:
+    """Find the most recent run directory."""
+    if not DATA_DIR.is_dir():
         return None
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return files[0]
+
+    # Look for directories that match run_id pattern (YYYYMMDD_HHMMSS)
+    run_dirs = [d for d in DATA_DIR.iterdir()
+                if d.is_dir() and len(d.name) == 15 and "_" in d.name]
+
+    if not run_dirs:
+        return None
+
+    run_dirs.sort(key=lambda p: p.name, reverse=True)
+    return run_dirs[0]
 
 
 def file_nonempty(path: Path) -> bool:
@@ -331,28 +346,32 @@ def determine_eligibility(metrics_df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def main() -> None:
-    ensure_dirs()
-    load_dotenv()
+def calculate_for_run(target_run_id: str, refresh_owners: bool = False) -> Path:
+    """Calculate metrics for a specific run. Returns path to output file."""
+    run_dir = DATA_DIR / target_run_id
+    if not run_dir.is_dir():
+        raise RuntimeError(f"Run directory not found: {run_dir}")
+
+    enums_path = run_dir / "enums.xlsx"
+    if not enums_path.is_file():
+        raise RuntimeError(f"Enums file not found: {enums_path}")
 
     deals_path = CACHE_DIR / "deals_raw.json"
     if not file_nonempty(deals_path):
         raise RuntimeError(f"Missing {deals_path}. Run fetch_hubspot.py first.")
 
-    enums_path = newest_file("enums_*.xlsx", OUTPUT_DIR)
-    if not enums_path:
-        raise RuntimeError("No data/enums_*.xlsx found. Run fetch_hubspot.py first.")
+    print(f"Calculating metrics for run: {target_run_id}")
     print(f"Using enums: {enums_path}")
 
     stages_df = pd.read_excel(enums_path, sheet_name="Stages")
 
-    mapping_path = OUTPUT_DIR / "mapping.xlsx"
+    # Mapping is shared across runs
+    mapping_path = DATA_DIR / "mapping.xlsx"
     if not mapping_path.is_file():
         mapping_df = build_default_stage_mapping(stages_df)
         with pd.ExcelWriter(mapping_path, engine="openpyxl") as w:
             mapping_df.to_excel(w, sheet_name="stage_mapping", index=False)
         print(f"Created default mapping: {mapping_path}")
-        print("Edit data/mapping.xlsx if you want to change stage classes, then re-run.")
 
     stage_map = load_mapping(mapping_path)
 
@@ -405,26 +424,43 @@ def main() -> None:
     final_df = determine_eligibility(metrics_df)
 
     # Owners enrichment
-    owners = load_or_fetch_owners(refresh=False)
+    owners = load_or_fetch_owners(refresh=refresh_owners)
     if owners:
         final_df.insert(1, "Coachnaam", final_df["coach_id"].astype(str).map(lambda x: owners.get(x, "UNKNOWN")))
     else:
         final_df.insert(1, "Coachnaam", "UNKNOWN")
 
-    out_path = OUTPUT_DIR / f"coach_eligibility_{run_id()}.xlsx"
+    # Save to run directory
+    out_path = run_dir / "coach_eligibility.xlsx"
     with pd.ExcelWriter(out_path, engine="openpyxl") as w:
         final_df.to_excel(w, sheet_name="Coaches", index=False)
-
         summary = deals_df.groupby(["pipeline", "class"]).size().reset_index(name="count")
         summary.to_excel(w, sheet_name="DealClassSummary", index=False)
-
         if owners:
             owners_df = pd.DataFrame([{"coach_id": k, "Coachnaam": v} for k, v in sorted(owners.items())])
             owners_df.to_excel(w, sheet_name="Owners", index=False)
 
     print(f"\nOK: wrote {out_path}")
     print(f"Mapping used: {mapping_path}")
-    print(f"Owners cache: {CACHE_DIR / 'owners.json'} ({'OK' if owners else 'not available'})")
+    print(f"Coaches: {len(final_df)}")
+
+    return out_path
+
+
+def main() -> None:
+    ensure_dirs()
+    load_dotenv()
+
+    # Get run_id from command line or find latest
+    if len(sys.argv) > 1:
+        target_run_id = sys.argv[1]
+    else:
+        latest_dir = get_latest_run_dir()
+        if not latest_dir:
+            raise RuntimeError("No run directories found. Run fetch_hubspot.py first.")
+        target_run_id = latest_dir.name
+
+    calculate_for_run(target_run_id)
 
 
 if __name__ == "__main__":

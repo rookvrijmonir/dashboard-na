@@ -36,33 +36,56 @@ st.markdown("""
 # ============================================================================
 
 def get_selected_data_file():
-    """Get the selected data file from runs.json, or fall back to most recent."""
+    """Get the selected data file from runs.json, or fall back to most recent run folder."""
     data_dir = Path("data")
     runs_file = data_dir / "runs.json"
 
     # Try to get selected run from runs.json
     if runs_file.is_file():
         try:
-            import json
             with open(runs_file, "r") as f:
                 runs_data = json.load(f)
             selected_id = runs_data.get("selected")
             if selected_id:
-                # Find the file matching this run_id
-                for run in runs_data.get("runs", []):
-                    if run.get("run_id") == selected_id:
-                        filepath = Path(run.get("filepath", ""))
-                        if filepath.is_file():
-                            return filepath
+                # New structure: data/<run_id>/coach_eligibility.xlsx
+                run_file = data_dir / selected_id / "coach_eligibility.xlsx"
+                if run_file.is_file():
+                    return run_file
         except:
             pass
 
-    # Fallback: find most recent file
+    # Fallback: find most recent run folder
+    run_dirs = [d for d in data_dir.iterdir()
+                if d.is_dir() and len(d.name) == 15 and "_" in d.name]
+    if run_dirs:
+        run_dirs.sort(key=lambda p: p.name, reverse=True)
+        for run_dir in run_dirs:
+            eligibility_file = run_dir / "coach_eligibility.xlsx"
+            if eligibility_file.is_file():
+                return eligibility_file
+
+    # Legacy fallback: old flat structure
     files = list(data_dir.glob("coach_eligibility_*.xlsx"))
-    if not files:
-        return None
-    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return files[0]
+    if files:
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        return files[0]
+
+    return None
+
+
+def get_selected_run_id():
+    """Get the currently selected run ID."""
+    data_dir = Path("data")
+    runs_file = data_dir / "runs.json"
+
+    if runs_file.is_file():
+        try:
+            with open(runs_file, "r") as f:
+                runs_data = json.load(f)
+            return runs_data.get("selected")
+        except:
+            pass
+    return None
 
 @st.cache_data
 def load_coach_data():
@@ -572,15 +595,19 @@ st.dataframe(
 
 st.markdown("---")
 # Get data file info for footer
-data_file = get_selected_data_file()
-data_date = data_file.stem.split("_")[-2] if data_file else "onbekend"  # Extract YYYYMMDD from filename
-if len(data_date) == 8:
-    data_date = f"{data_date[6:8]}-{data_date[4:6]}-{data_date[:4]}"  # Format as DD-MM-YYYY
+run_id = get_selected_run_id()
+if run_id and len(run_id) == 15:
+    # Parse run_id format: YYYYMMDD_HHMMSS
+    data_date = f"{run_id[6:8]}-{run_id[4:6]}-{run_id[:4]}"
+    data_time = f"{run_id[9:11]}:{run_id[11:13]}"
+    run_info = f"Run: {data_date} {data_time}"
+else:
+    run_info = "Run: onbekend"
 
 st.markdown(f"""
 <div style='text-align: center; color: gray; font-size: 0.9em;'>
     <p>💊 <b>Coach Prestatie Dashboard - Nationale Apotheek</b></p>
-    <p>Data van {data_date} | Bestand: {data_file.name if data_file else 'onbekend'}</p>
+    <p>{run_info} | 🔄 <a href="/Data_Beheer" target="_self">Data Beheer</a></p>
     <p>📖 Klik op <b>Uitleg</b> in het linkermenu voor hulp</p>
 </div>
 """, unsafe_allow_html=True)

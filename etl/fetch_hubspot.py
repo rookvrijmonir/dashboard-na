@@ -35,17 +35,27 @@ import pandas as pd
 # Project root (one level up from etl/)
 PROJECT_ROOT = Path(__file__).parent.parent
 CACHE_DIR = PROJECT_ROOT / "etl" / "cache"
-OUTPUT_DIR = PROJECT_ROOT / "data"
+DATA_DIR = PROJECT_ROOT / "data"
 LOG_DIR = PROJECT_ROOT / "etl" / "logs"
+
+# Will be set per run
+RUN_OUTPUT_DIR = None
 
 
 def utc_now_run_id() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
 
-def ensure_dirs() -> None:
-    for d in (CACHE_DIR, OUTPUT_DIR, LOG_DIR):
+def ensure_dirs(run_id: str = None) -> Path:
+    """Ensure directories exist. If run_id provided, create run-specific output dir."""
+    for d in (CACHE_DIR, DATA_DIR, LOG_DIR):
         d.mkdir(parents=True, exist_ok=True)
+
+    if run_id:
+        run_output_dir = DATA_DIR / run_id
+        run_output_dir.mkdir(parents=True, exist_ok=True)
+        return run_output_dir
+    return DATA_DIR
 
 
 def load_dotenv(path: Path = None) -> None:
@@ -257,7 +267,7 @@ class Workflow:
         self.run_id = run_id
         self.log = logger
         self.client = HubSpotClient(cfg, logger)
-        ensure_dirs()
+        self.run_output_dir = ensure_dirs(run_id)
 
     def _load_or_fetch_contacts(self, refresh: bool) -> List[Dict[str, Any]]:
         cache_json = CACHE_DIR / "na_contacts.json"
@@ -362,7 +372,7 @@ class Workflow:
         return deals
 
     def _dump_enums(self, deals: List[Dict[str, Any]], refresh: bool) -> Path:
-        out_xlsx = OUTPUT_DIR / f"enums_{self.run_id}.xlsx"
+        out_xlsx = self.run_output_dir / "enums.xlsx"
         if not refresh and out_xlsx.is_file() and out_xlsx.stat().st_size > 1000:
             self.log.info("Enums already exist: %s", out_xlsx)
             return out_xlsx
@@ -456,11 +466,15 @@ class Workflow:
         print("\n" + "=" * 80)
         print("Fetch complete")
         print("=" * 80)
+        print(f"Run ID: {self.run_id}")
+        print(f"Output folder: {self.run_output_dir}")
         print(f"NA contacts: {len(contacts)}  ({CACHE_DIR / 'na_contacts.json'})")
         print(f"Unique deals: {len(unique_deals)} ({CACHE_DIR / 'deal_ids.json'})")
         print(f"Deals raw: {len(deals)}    ({CACHE_DIR / 'deals_raw.json'})")
         print(f"Enums Excel: {enums_path}")
         print("=" * 80 + "\n")
+
+        return self.run_id  # Return run_id for metrics script
 
 
 def parse_args(argv: List[str]) -> Tuple[str]:

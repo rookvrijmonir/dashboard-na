@@ -15,13 +15,15 @@ Requirements:
 
 import subprocess
 import sys
+import json
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).parent
+DATA_DIR = PROJECT_ROOT / "data"
 
 
-def run_script(script_path: Path, args: list = None) -> bool:
-    """Run a Python script and return True if successful."""
+def run_script(script_path: Path, args: list = None) -> tuple:
+    """Run a Python script and return (success, output)."""
     cmd = [sys.executable, str(script_path)]
     if args:
         cmd.extend(args)
@@ -30,8 +32,42 @@ def run_script(script_path: Path, args: list = None) -> bool:
     print(f"Running: {' '.join(cmd)}")
     print('='*60)
 
-    result = subprocess.run(cmd, cwd=PROJECT_ROOT)
-    return result.returncode == 0
+    result = subprocess.run(cmd, cwd=PROJECT_ROOT, capture_output=True, text=True)
+    print(result.stdout)
+    if result.stderr:
+        print(result.stderr)
+
+    return result.returncode == 0, result.stdout
+
+
+def update_runs_json(run_id: str):
+    """Update runs.json to include new run and select it."""
+    runs_file = DATA_DIR / "runs.json"
+
+    if runs_file.is_file():
+        with open(runs_file, "r") as f:
+            runs_data = json.load(f)
+    else:
+        runs_data = {"runs": [], "selected": None}
+
+    # Check if run already exists
+    existing_ids = [r["run_id"] for r in runs_data["runs"]]
+    if run_id not in existing_ids:
+        runs_data["runs"].insert(0, {
+            "run_id": run_id,
+            "folder": str(DATA_DIR / run_id),
+            "datetime": f"{run_id[:4]}-{run_id[4:6]}-{run_id[6:8]}T{run_id[9:11]}:{run_id[11:13]}:{run_id[13:15]}",
+            "datetime_display": f"{run_id[6:8]}-{run_id[4:6]}-{run_id[:4]} {run_id[9:11]}:{run_id[11:13]}:{run_id[13:15]}",
+            "date_display": f"{run_id[6:8]}-{run_id[4:6]}-{run_id[:4]}",
+            "time_display": f"{run_id[9:11]}:{run_id[11:13]}:{run_id[13:15]}",
+            "coach_count": None,
+            "has_enums": True
+        })
+
+    runs_data["selected"] = run_id
+
+    with open(runs_file, "w") as f:
+        json.dump(runs_data, f, indent=2)
 
 
 def main():
@@ -53,9 +89,37 @@ def main():
         print(f"ERROR: {fetch_script} not found!")
         sys.exit(1)
 
-    if not run_script(fetch_script, refresh_arg):
+    success, output = run_script(fetch_script, refresh_arg)
+    if not success:
         print("\nERROR: Fetch failed!")
         sys.exit(1)
+
+    # Extract run_id from output
+    run_id = None
+    for line in output.split("\n"):
+        if "Run ID:" in line:
+            run_id = line.split("Run ID:")[-1].strip()
+            break
+        if "Output folder:" in line and "data/" in line:
+            # Extract from path like "data/20260121_195256/"
+            parts = line.split("data/")[-1].strip().rstrip("/")
+            if len(parts) == 15 and "_" in parts:
+                run_id = parts
+                break
+
+    if not run_id:
+        # Try to find latest run folder
+        run_dirs = [d for d in DATA_DIR.iterdir()
+                    if d.is_dir() and len(d.name) == 15 and "_" in d.name]
+        if run_dirs:
+            run_dirs.sort(key=lambda p: p.name, reverse=True)
+            run_id = run_dirs[0].name
+
+    if not run_id:
+        print("\nERROR: Could not determine run_id!")
+        sys.exit(1)
+
+    print(f"\nRun ID: {run_id}")
 
     # Step 2: Calculate metrics
     metrics_script = PROJECT_ROOT / "etl" / "calculate_metrics.py"
@@ -63,19 +127,25 @@ def main():
         print(f"ERROR: {metrics_script} not found!")
         sys.exit(1)
 
-    if not run_script(metrics_script):
+    success, _ = run_script(metrics_script, [run_id])
+    if not success:
         print("\nERROR: Metrics calculation failed!")
         sys.exit(1)
+
+    # Update runs.json
+    update_runs_json(run_id)
 
     # Done
     print("\n" + "="*60)
     print("SUCCESS! Data refreshed.")
     print("="*60)
-    print("\nNew data files in data/:")
+    print(f"\nRun folder: data/{run_id}/")
 
-    data_dir = PROJECT_ROOT / "data"
-    for f in sorted(data_dir.glob("coach_eligibility_*.xlsx"))[-3:]:
-        print(f"  - {f.name}")
+    run_dir = DATA_DIR / run_id
+    if run_dir.is_dir():
+        print("Contents:")
+        for f in run_dir.iterdir():
+            print(f"  - {f.name}")
 
     print("\nRun the dashboard with:")
     print("  streamlit run dashboard_app.py")
