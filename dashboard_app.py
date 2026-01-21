@@ -35,9 +35,29 @@ st.markdown("""
 # DATA LOADING (CACHED)
 # ============================================================================
 
-def get_latest_data_file():
-    """Find the most recent coach_eligibility file."""
+def get_selected_data_file():
+    """Get the selected data file from runs.json, or fall back to most recent."""
     data_dir = Path("data")
+    runs_file = data_dir / "runs.json"
+
+    # Try to get selected run from runs.json
+    if runs_file.is_file():
+        try:
+            import json
+            with open(runs_file, "r") as f:
+                runs_data = json.load(f)
+            selected_id = runs_data.get("selected")
+            if selected_id:
+                # Find the file matching this run_id
+                for run in runs_data.get("runs", []):
+                    if run.get("run_id") == selected_id:
+                        filepath = Path(run.get("filepath", ""))
+                        if filepath.is_file():
+                            return filepath
+        except:
+            pass
+
+    # Fallback: find most recent file
     files = list(data_dir.glob("coach_eligibility_*.xlsx"))
     if not files:
         return None
@@ -47,7 +67,7 @@ def get_latest_data_file():
 @st.cache_data
 def load_coach_data():
     """Load coaches data from Excel."""
-    file_path = get_latest_data_file()
+    file_path = get_selected_data_file()
     if file_path is None:
         raise FileNotFoundError("No coach_eligibility_*.xlsx found in data/")
     df = pd.read_excel(file_path, sheet_name="Coaches")
@@ -71,7 +91,7 @@ def load_coach_data():
 @st.cache_data
 def load_deal_class_summary():
     """Load deal class summary for sanity checks."""
-    file_path = get_latest_data_file()
+    file_path = get_selected_data_file()
     if file_path is None:
         raise FileNotFoundError("No coach_eligibility_*.xlsx found in data/")
     df = pd.read_excel(file_path, sheet_name="DealClassSummary")
@@ -552,7 +572,7 @@ st.dataframe(
 
 st.markdown("---")
 # Get data file info for footer
-data_file = get_latest_data_file()
+data_file = get_selected_data_file()
 data_date = data_file.stem.split("_")[-2] if data_file else "onbekend"  # Extract YYYYMMDD from filename
 if len(data_date) == 8:
     data_date = f"{data_date[6:8]}-{data_date[4:6]}-{data_date[:4]}"  # Format as DD-MM-YYYY
