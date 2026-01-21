@@ -352,26 +352,32 @@ st.markdown(f"### 📊 Kerncijfers ({periode_label})")
 # Only calculate metrics for coaches above threshold
 threshold_df = filtered_df[filtered_df['meets_threshold']]
 
-col1, col2, col3, col4 = st.columns(4)
+# Calculate total deals in sample (all filtered coaches, not just above threshold)
+total_deals_sample = filtered_df[deals_col].sum()
+
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
+    st.metric("Deals in sample", f"{int(total_deals_sample):,}".replace(",", "."))
+
+with col2:
     if len(threshold_df) > 0:
         avg_smoothed = threshold_df[winrate_col].mean()
         st.metric("Gem. winstpercentage", f"{avg_smoothed:.1f}%")
     else:
         st.metric("Gem. winstpercentage", "N/A")
 
-with col2:
+with col3:
     if len(threshold_df) > 0:
         avg_deals = threshold_df[deals_col].mean()
-        st.metric(f"Gem. deals", f"{avg_deals:.1f}")
+        st.metric(f"Gem. deals/coach", f"{avg_deals:.1f}")
     else:
-        st.metric(f"Gem. deals", "N/A")
-
-with col3:
-    st.metric("Mediaan", f"{selected_median:.1f}%")
+        st.metric(f"Gem. deals/coach", "N/A")
 
 with col4:
+    st.metric("Mediaan", f"{selected_median:.1f}%")
+
+with col5:
     if len(threshold_df) > 0:
         pct_above = (threshold_df[winrate_col] >= selected_median).sum() / len(threshold_df) * 100
         st.metric("% boven mediaan", f"{pct_above:.0f}%")
