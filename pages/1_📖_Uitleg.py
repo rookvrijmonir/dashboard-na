@@ -286,7 +286,7 @@ st.error("""
 | Naam | Reden |
 |------|-------|
 | Nabeller * | Dit zijn nabellers, geen coaches |
-| Rookvrij en Fitter Het Gooi | Dit is een programma, geen persoon |
+| Rookvrij en Fitter Het Gooi | Doorstuur account |
 | 167331984 | Onbekend account |
 | UNKNOWN | Onbekende entries |
 | benVitaal Coaching | Gestopt account |
