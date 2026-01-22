@@ -111,20 +111,23 @@ def scan_existing_runs() -> list:
 def sync_runs_file():
     """Sync runs.json with actual folders in data directory."""
     runs_data = load_runs()
-    scanned = scan_existing_runs()
 
-    # Update runs list
-    runs_data["runs"] = scanned
+    # On Streamlit Cloud, trust runs.json (we can't write anyway)
+    # Only scan and replace on local environments
+    if not is_streamlit_cloud():
+        scanned = scan_existing_runs()
+        runs_data["runs"] = scanned
 
-    # Ensure selected run still exists
-    if runs_data["selected"]:
-        valid_ids = [r["run_id"] for r in scanned]
-        if runs_data["selected"] not in valid_ids:
-            runs_data["selected"] = scanned[0]["run_id"] if scanned else None
-    elif scanned:
-        runs_data["selected"] = scanned[0]["run_id"]
+        # Ensure selected run still exists
+        if runs_data["selected"]:
+            valid_ids = [r["run_id"] for r in scanned]
+            if runs_data["selected"] not in valid_ids:
+                runs_data["selected"] = scanned[0]["run_id"] if scanned else None
+        elif scanned:
+            runs_data["selected"] = scanned[0]["run_id"]
 
-    save_runs(runs_data)
+        save_runs(runs_data)
+
     return runs_data
 
 
