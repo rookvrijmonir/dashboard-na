@@ -12,6 +12,10 @@ from datetime import datetime, timezone
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
+# Load .env file for local development
+from etl.fetch_hubspot import load_dotenv
+load_dotenv()
+
 st.set_page_config(
     page_title="Data Beheer - Nationale Apotheek",
     page_icon="🔄",
@@ -39,10 +43,14 @@ def load_runs() -> dict:
 
 
 def save_runs(runs_data: dict):
-    """Save run history to JSON."""
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with open(RUNS_FILE, "w") as f:
-        json.dump(runs_data, f, indent=2, default=str)
+    """Save run history to JSON. Silently fails on read-only filesystem (Streamlit Cloud)."""
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(RUNS_FILE, "w") as f:
+            json.dump(runs_data, f, indent=2, default=str)
+    except (OSError, PermissionError):
+        # Read-only filesystem (Streamlit Cloud) - ignore
+        pass
 
 
 def scan_existing_runs() -> list:
@@ -120,16 +128,38 @@ def sync_runs_file():
     return runs_data
 
 
-def check_env_file() -> bool:
-    """Check if .env file exists with HUBSPOT_PAT."""
-    env_path = PROJECT_ROOT / ".env"
-    if not env_path.is_file():
-        return False
+def is_streamlit_cloud() -> bool:
+    """Detect if running on Streamlit Cloud."""
+    # Streamlit Cloud runs from /mount/src or has HOME=/home/appuser
+    if Path("/mount/src").exists():
+        return True
+    if os.environ.get("HOME") == "/home/appuser":
+        return True
+    # Also check for the STREAMLIT_SHARING_MODE env var (older detection)
+    if os.environ.get("STREAMLIT_SHARING_MODE"):
+        return True
+    return False
 
-    with open(env_path, "r") as f:
-        content = f.read()
-        if "HUBSPOT_PAT=" in content and "pat-xx-" not in content:
-            return True
+
+def get_hubspot_pat() -> str:
+    """Get HUBSPOT_PAT from Streamlit secrets or environment."""
+    # First try Streamlit secrets (for Streamlit Cloud)
+    try:
+        pat = st.secrets.get("HUBSPOT_PAT", "")
+        if pat and not pat.startswith("pat-xx-"):
+            return pat
+    except Exception:
+        pass
+
+    # Fallback to environment variable (for local .env)
+    return os.environ.get("HUBSPOT_PAT", "")
+
+
+def check_env_file() -> bool:
+    """Check if HUBSPOT_PAT is available (via secrets or .env)."""
+    pat = get_hubspot_pat()
+    if pat and not pat.startswith("pat-xx-"):
+        return True
     return False
 
 
@@ -146,12 +176,12 @@ def run_etl_with_progress(refresh_all: bool = True):
     )
     import logging
 
-    # Setup
+    # Setup - load .env for local, st.secrets is auto-loaded
     load_dotenv()
 
-    pat = os.environ.get("HUBSPOT_PAT", "").strip()
+    pat = get_hubspot_pat().strip()
     if not pat:
-        st.error("❌ HUBSPOT_PAT niet gevonden in .env bestand!")
+        st.error("❌ HUBSPOT_PAT niet gevonden! Voeg toe via Streamlit secrets of .env bestand.")
         return None
 
     run_id = utc_now_run_id()
@@ -245,6 +275,9 @@ def run_etl_with_progress(refresh_all: bool = True):
 # Main UI
 st.markdown("---")
 
+# Detect environment
+on_cloud = is_streamlit_cloud()
+
 # Sync runs on page load
 runs_data = sync_runs_file()
 
@@ -303,52 +336,71 @@ else:
 st.markdown("---")
 st.markdown("## 🔄 Data Vernieuwen")
 
-# Check prerequisites
-env_ok = check_env_file()
+if on_cloud:
+    st.info("""
+    ☁️ **Je draait op Streamlit Cloud**
 
-if not env_ok:
-    st.error("""
-    ❌ **Geen HubSpot token gevonden!**
+    Data vernieuwen is alleen beschikbaar wanneer je het dashboard lokaal draait.
+    Streamlit Cloud heeft een read-only filesystem waardoor nieuwe data niet opgeslagen kan worden.
 
-    Maak een `.env` bestand in de project root met:
-    ```
-    HUBSPOT_PAT=pat-xx-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-    ```
+    **Om data te vernieuwen:**
+    1. Draai het dashboard lokaal
+    2. Klik op "Data Ophalen"
+    3. Commit de nieuwe data naar je repository
+    4. Push naar GitHub - Streamlit Cloud update automatisch
     """)
 else:
-    st.success("✓ HubSpot configuratie gevonden")
+    # Check prerequisites
+    env_ok = check_env_file()
 
-    st.markdown("""
-    Klik op de knop om verse data op te halen uit HubSpot.
-    Elke run wordt opgeslagen in een aparte map zodat je kunt vergelijken.
-    """)
+    if not env_ok:
+        st.error("""
+        ❌ **Geen HubSpot token gevonden!**
 
-    col1, col2 = st.columns([1, 2])
+        **Lokaal:** Maak een `.env` bestand in de project root met:
+        ```
+        HUBSPOT_PAT=pat-xx-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        ```
 
-    with col1:
-        if st.button("🔄 Data Ophalen", type="primary", use_container_width=True):
-            st.markdown("---")
-            st.markdown("### Voortgang")
-
-            result = run_etl_with_progress(refresh_all=True)
-
-            if result:
-                st.balloons()
-                st.success(f"✅ Nieuwe dataset aangemaakt: `{result}`")
-                time.sleep(2)
-                st.rerun()
-
-    with col2:
-        st.info("""
-        **Wat gebeurt er?**
-        1. Contacten ophalen (Nationale Apotheek)
-        2. Deal koppelingen ophalen
-        3. Deal details ophalen
-        4. Pipeline configuratie laden
-        5. Metrics berekenen en opslaan
-
-        **Output:** `data/YYYYMMDD_HHMMSS/`
+        **Streamlit Cloud:** Voeg toe aan Secrets (TOML):
+        ```toml
+        HUBSPOT_PAT = "pat-xx-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        ```
         """)
+    else:
+        st.success("✓ HubSpot configuratie gevonden")
+
+        st.markdown("""
+        Klik op de knop om verse data op te halen uit HubSpot.
+        Elke run wordt opgeslagen in een aparte map zodat je kunt vergelijken.
+        """)
+
+        col1, col2 = st.columns([1, 2])
+
+        with col1:
+            if st.button("🔄 Data Ophalen", type="primary", use_container_width=True):
+                st.markdown("---")
+                st.markdown("### Voortgang")
+
+                result = run_etl_with_progress(refresh_all=True)
+
+                if result:
+                    st.balloons()
+                    st.success(f"✅ Nieuwe dataset aangemaakt: `{result}`")
+                    time.sleep(2)
+                    st.rerun()
+
+        with col2:
+            st.info("""
+            **Wat gebeurt er?**
+            1. Contacten ophalen (Nationale Apotheek)
+            2. Deal koppelingen ophalen
+            3. Deal details ophalen
+            4. Pipeline configuratie laden
+            5. Metrics berekenen en opslaan
+
+            **Output:** `data/YYYYMMDD_HHMMSS/`
+            """)
 
 # Section 3: Run History
 st.markdown("---")
@@ -378,13 +430,15 @@ if runs_data["runs"]:
                         save_runs(runs_data)
                         st.rerun()
 
-                    if st.button("🗑️", key=f"delete_{run['run_id']}", help="Verwijder deze run"):
-                        folder_path = Path(run["folder"])
-                        if folder_path.is_dir():
-                            shutil.rmtree(folder_path)
-                            st.success(f"Verwijderd: {run['run_id']}")
-                            time.sleep(1)
-                            st.rerun()
+                    # Hide delete button on Streamlit Cloud (read-only filesystem)
+                    if not on_cloud:
+                        if st.button("🗑️", key=f"delete_{run['run_id']}", help="Verwijder deze run"):
+                            folder_path = Path(run["folder"])
+                            if folder_path.is_dir():
+                                shutil.rmtree(folder_path)
+                                st.success(f"Verwijderd: {run['run_id']}")
+                                time.sleep(1)
+                                st.rerun()
                 else:
                     st.markdown("*Actief*")
 
