@@ -80,7 +80,7 @@ drempelwaarden aanpassen in de sidebar onder "Status Berekening".
 col1, col2 = st.columns(2)
 
 with col1:
-    st.markdown("### ✅ Laag 2")
+    st.markdown("### ✅ Goed")
     st.success("""
     **Beste presteerders**
 
@@ -92,12 +92,12 @@ with col1:
     *Dit zijn de coaches die consistent goed presteren.*
     """)
 
-    st.markdown("### ⭐ Laag 3")
+    st.markdown("### ⭐ Matig")
     st.info("""
     **Opkomende coaches**
 
     Deze coaches:
-    - Hebben minder deals dan Laag 2 (maar minimaal de helft)
+    - Hebben minder deals dan Goed (maar minimaal de helft)
     - Winstpercentage is minimaal 80% van de mediaan
     - Zijn wel actief en presteren redelijk
 
@@ -218,7 +218,7 @@ st.markdown("""
 - Dit geeft een overzicht van de verdeling van je team
 
 **Voorbeeld interpretatie:**
-> "Van de 105 coaches zijn er 16 in Laag 2 (top presteerders) en 51 uitgesloten."
+> "Van de 105 coaches zijn er 16 in Goed (top presteerders) en 51 uitgesloten."
 """)
 
 # ============================================================================
@@ -257,7 +257,7 @@ De tabel onderaan het dashboard toont alle coaches met hun cijfers **voor de ges
 | Kolom | Betekenis |
 |-------|-----------|
 | **Coach** | Naam van de coach |
-| **Status** | De berekende status (Laag 2, Laag 3, etc.) |
+| **Status** | De berekende status (Goed, Matig, etc.) |
 | **Deals** | Aantal deals in de geselecteerde periode |
 | **Winst%** | Winstpercentage in de geselecteerde periode |
 | **Boven drempel** | ✅ als de coach meer dan het minimum aantal deals heeft |
@@ -376,8 +376,8 @@ with st.expander("Hoe verander ik de status berekening?"):
     st.markdown("""
     In de sidebar onder **"⭐ Status Berekening"** kun je aanpassen:
 
-    - **Minimum deals voor Laag 2:** Standaard 14
-    - De Laag 3 drempel is automatisch de helft hiervan
+    - **Minimum deals voor Goed:** Standaard 14
+    - De Matig drempel is automatisch de helft hiervan
 
     De status wordt direct herberekend als je de slider aanpast.
     """)
@@ -392,7 +392,7 @@ st.markdown("## 10. Samenvatting")
 st.info("""
 **De belangrijkste punten:**
 
-1. **Status bepaalt geschiktheid** - Alleen Laag 2 en Laag 3 komen in aanmerking
+1. **Status bepaalt geschiktheid** - Alleen Goed en Matig komen in aanmerking
 2. **Volume is belangrijk** - Minimum deals drempel is configureerbaar (standaard 14)
 3. **Mediaan is dynamisch** - Wordt berekend op basis van periode en filters
 4. **Grafieken lezen** - Rechtsboven in de scatter = beste coaches

@@ -243,23 +243,23 @@ st.sidebar.markdown("### ⭐ Status Berekening")
 st.sidebar.markdown(f"*Gebaseerd op {periode_label}*")
 
 laag2_threshold = st.sidebar.slider(
-    f"Minimum deals voor Laag 2",
+    f"Minimum deals voor Goed",
     min_value=1,
     max_value=30,
     value=14,
     step=1,
-    help=f"Coaches met minimaal dit aantal deals ({periode_label}) EN boven de mediaan krijgen status 'Laag 2'"
+    help=f"Coaches met minimaal dit aantal deals ({periode_label}) EN boven de mediaan krijgen status 'Goed'"
 )
 
 with st.sidebar.expander("ℹ️ Hoe wordt status berekend?"):
     st.markdown(f"""
     **De regels (voor {periode_label}):**
 
-    ✅ **Laag 2** =
+    ✅ **Goed** =
     - Minimaal **{laag2_threshold}** deals
     - Winstpercentage **≥ {selected_median:.1f}%** (mediaan)
 
-    ⭐ **Laag 3** =
+    ⭐ **Matig** =
     - Minimaal **{laag2_threshold // 2}** deals
     - Winstpercentage **≥ {selected_median * 0.8:.1f}%** (80% van mediaan)
 
@@ -278,9 +278,9 @@ def calculate_status(row):
     if deals == 0:
         return "⚪ Geen data"
     elif deals >= laag2_threshold and winrate >= selected_median:
-        return "✅ Laag 2"
+        return "✅ Goed"
     elif deals >= (laag2_threshold // 2) and winrate >= selected_median * 0.8:
-        return "⭐ Laag 3"
+        return "⭐ Matig"
     else:
         return "❌ Uitsluiten"
 

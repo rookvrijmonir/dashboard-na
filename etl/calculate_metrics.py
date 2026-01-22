@@ -328,9 +328,9 @@ def determine_eligibility(metrics_df: pd.DataFrame) -> pd.DataFrame:
         elif nab_pct > 20.0:
             label = "⚠️ Uitsluiten"
         elif sm_1m >= p50 and open_1m >= 5:
-            label = "✅ Laag 2"
+            label = "✅ Goed"
         elif sm_1m > 20.0 and 3 <= open_1m <= 9:
-            label = "⭐ Laag 3"
+            label = "⭐ Matig"
         else:
             label = "❌ Uitsluiten"
 
@@ -339,7 +339,7 @@ def determine_eligibility(metrics_df: pd.DataFrame) -> pd.DataFrame:
     df["eligibility"] = elig
     df["p50_smoothed_1m"] = round(p50, 1)
 
-    order = {"✅ Laag 2": 0, "⭐ Laag 3": 1, "⚠️ Uitsluiten": 2, "❌ Uitsluiten": 3, "Geen data": 4}
+    order = {"✅ Goed": 0, "⭐ Matig": 1, "⚠️ Uitsluiten": 2, "❌ Uitsluiten": 3, "Geen data": 4}
     df["_sort"] = df["eligibility"].map(lambda x: order.get(x, 99))
     df = df.sort_values(by=["_sort", "rate_1m"], ascending=[True, False]).drop(columns=["_sort"])
 
