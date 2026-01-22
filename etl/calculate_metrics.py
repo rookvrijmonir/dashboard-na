@@ -444,6 +444,44 @@ def calculate_for_run(target_run_id: str, refresh_owners: bool = False) -> Path:
     print(f"Mapping used: {mapping_path}")
     print(f"Coaches: {len(final_df)}")
 
+    # Write deals_flat.csv for Week Monitor
+    deals_flat_path = write_deals_flat_csv(deals_df, owners, run_dir)
+    print(f"Deals flat: {deals_flat_path}")
+
+    return out_path
+
+
+def write_deals_flat_csv(deals_df: pd.DataFrame, owners: Dict[str, str], run_dir: Path) -> Path:
+    """
+    Write a flat CSV of all deals for the Week Monitor.
+
+    Columns:
+    - deal_id
+    - coach_id
+    - Coachnaam
+    - created_dt (ISO string)
+    - pipeline
+    - class (WON/LOST/OPEN/NABELLER_HANDOFF)
+    """
+    flat_df = deals_df[["deal_id", "coach_id", "pipeline", "class", "created_dt"]].copy()
+
+    # Add coach name
+    if owners:
+        flat_df["Coachnaam"] = flat_df["coach_id"].map(lambda x: owners.get(str(x), "UNKNOWN"))
+    else:
+        flat_df["Coachnaam"] = "UNKNOWN"
+
+    # Convert datetime to ISO string
+    flat_df["created_dt"] = flat_df["created_dt"].apply(
+        lambda dt: dt.isoformat() if pd.notna(dt) else ""
+    )
+
+    # Reorder columns
+    flat_df = flat_df[["deal_id", "coach_id", "Coachnaam", "created_dt", "pipeline", "class"]]
+
+    out_path = run_dir / "deals_flat.csv"
+    flat_df.to_csv(out_path, index=False, encoding="utf-8")
+
     return out_path
 
 
