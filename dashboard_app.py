@@ -419,6 +419,14 @@ if len(below_threshold) > 0:
     ))
 
 # Add coaches above threshold (colored by status)
+status_colors = {
+    "✅ Goed": "#28a745",       # green
+    "⭐ Matig": "#ffc107",      # yellow
+    "❌ Uitsluiten": "#dc3545", # red
+    "⚠️ Uitsluiten": "#dc3545", # red
+    "⚪ Geen data": "#6c757d",  # gray
+}
+
 if len(above_threshold) > 0:
     for status in above_threshold['display_status'].unique():
         status_df = above_threshold[above_threshold['display_status'] == status]
@@ -427,7 +435,7 @@ if len(above_threshold) > 0:
             y=status_df[winrate_col],
             mode='markers',
             name=status,
-            marker=dict(size=12),
+            marker=dict(size=12, color=status_colors.get(status, "#999999")),
             text=status_df['Coachnaam'],
             hovertemplate='<b>%{text}</b><br>Deals: %{x}<br>Winst: %{y:.1f}%<br>Status: ' + status + '<extra></extra>'
         ))
@@ -523,13 +531,23 @@ st.markdown("## 3️⃣ Aantal Coaches per Status")
 status_counts_chart = filtered_df[filtered_df['meets_threshold']]['display_status'].value_counts().reset_index()
 status_counts_chart.columns = ['Status', 'Aantal']
 
+# Map status to colors
+status_colors_bar = {
+    "✅ Goed": "#28a745",       # green
+    "⭐ Matig": "#ffc107",      # yellow
+    "❌ Uitsluiten": "#dc3545", # red
+    "⚠️ Uitsluiten": "#dc3545", # red
+    "⚪ Geen data": "#6c757d",  # gray
+}
+status_counts_chart['Color'] = status_counts_chart['Status'].map(lambda s: status_colors_bar.get(s, "#999999"))
+
 fig_bar = px.bar(
     status_counts_chart,
     x='Status',
     y='Aantal',
     text='Aantal',
-    color='Aantal',
-    color_continuous_scale='Blues'
+    color='Status',
+    color_discrete_map=status_colors_bar
 )
 
 fig_bar.update_traces(
