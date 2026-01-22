@@ -402,7 +402,7 @@ below_threshold = filtered_df[filtered_df[deals_col] < min_deals]
 
 fig_scatter = go.Figure()
 
-# Add coaches below threshold (gray, smaller)
+# Add coaches below threshold (orange, smaller)
 if len(below_threshold) > 0:
     fig_scatter.add_trace(go.Scatter(
         x=below_threshold[deals_col],
@@ -411,8 +411,8 @@ if len(below_threshold) > 0:
         name=f'Onder {min_deals} deals',
         marker=dict(
             size=8,
-            color='lightgray',
-            opacity=0.5
+            color='#fd7e14',  # orange
+            opacity=0.7
         ),
         text=below_threshold['Coachnaam'],
         hovertemplate='<b>%{text}</b><br>Deals: %{x}<br>Winst: %{y:.1f}%<br><i>(onder drempel)</i><extra></extra>'
