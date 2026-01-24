@@ -622,69 +622,25 @@ st.markdown("---")
 st.markdown("## 📤 NA_Pool Export")
 st.markdown(f"*Push eligible coaches naar Google Sheets (NA_Pool tabblad) - Periode: **{periode_label}***")
 
-# Check if GOOGLE_SA_JSON_PATH is set
+# Check if GOOGLE_SA_JSON_PATH is set or fallback exists
 google_sa_path = os.environ.get("GOOGLE_SA_JSON_PATH")
-if not google_sa_path:
+google_sa_fallback = Path("secrets/service_account.json")
+
+if not google_sa_path and not google_sa_fallback.is_file():
     st.warning(
-        "⚠️ **GOOGLE_SA_JSON_PATH** environment variable is niet ingesteld.\n\n"
-        "Stel in met:\n```\nexport GOOGLE_SA_JSON_PATH=/pad/naar/service_account.json\n```\n\n"
-        "De push functie is uitgeschakeld tot dit is ingesteld."
+        "⚠️ **Google Service Account niet gevonden.**\n\n"
+        "Plaats `service_account.json` in de `secrets/` map, of stel in met:\n"
+        "```\nexport GOOGLE_SA_JSON_PATH=/pad/naar/service_account.json\n```"
     )
     na_pool_enabled = False
 else:
     na_pool_enabled = True
 
 # ===================
-# NA_Pool Status Thresholds (zelfde logica als sidebar)
+# Alert Thresholds (zelfde als Week Monitor) - EERST deze, want ze beïnvloeden de mediaan
 # ===================
-st.markdown("### ⭐ Status Thresholds voor Export")
-st.markdown(f"*Bepaal welke coaches eligible zijn voor NA_Pool (gebaseerd op {periode_label})*")
-
-na_thresh_col1, na_thresh_col2 = st.columns(2)
-
-with na_thresh_col1:
-    na_laag2_threshold = st.slider(
-        f"Minimum deals voor 'Goed' ({periode_label})",
-        min_value=1,
-        max_value=30,
-        value=14,
-        step=1,
-        key="na_pool_laag2_threshold",
-        help=f"Coaches met minimaal dit aantal deals EN boven de mediaan krijgen status 'Goed'"
-    )
-
-with na_thresh_col2:
-    # Calculate mediaan for display
-    na_base_mediaan = coaches_df[winrate_col].median()
-    st.metric(f"Mediaan winst% ({periode_label})", f"{na_base_mediaan:.1f}%")
-
-# Uitleg status berekening
-with st.expander("ℹ️ Hoe wordt status berekend voor export?"):
-    st.markdown(f"""
-    **De regels (voor {periode_label}):**
-
-    ✅ **Goed** (wordt geëxporteerd) =
-    - Minimaal **{na_laag2_threshold}** deals
-    - Winstpercentage **≥ {na_base_mediaan:.1f}%** (mediaan)
-
-    ⭐ **Matig** (wordt geëxporteerd) =
-    - Minimaal **{na_laag2_threshold // 2}** deals
-    - Winstpercentage **≥ {na_base_mediaan * 0.8:.1f}%** (80% van mediaan)
-
-    ❌ **Uitsluiten** (wordt NIET geëxporteerd) =
-    - Voldoet niet aan bovenstaande criteria
-
-    ⚪ **Geen data** (wordt NIET geëxporteerd) =
-    - 0 deals in {periode_label}
-    """)
-
-st.markdown("---")
-
-# ===================
-# Alert Thresholds (zelfde als Week Monitor)
-# ===================
-st.markdown("### ⚠️ Alert Thresholds")
-st.markdown("*Dezelfde thresholds als op de Week Monitor pagina*")
+st.markdown("### ⚠️ Pre-filters (beïnvloeden mediaan)")
+st.markdown("**Let op:** Deze sliders bepalen welke coaches meetellen voor de mediaan berekening hieronder.")
 
 na_alert_col1, na_alert_col2, na_alert_col3 = st.columns(3)
 
@@ -712,14 +668,121 @@ with na_alert_col2:
 
 with na_alert_col3:
     na_min_deals_week = st.slider(
-        "Minimum deals/week",
+        "Minimum deals",
         min_value=1,
         max_value=15,
         value=5,
         step=1,
         key="na_pool_min_deals_week",
-        help="Minimum deals per week om mee te tellen voor alerts"
+        help="Coaches met minder deals worden uitgesloten"
     )
+
+st.markdown("---")
+
+# ===================
+# Pre-filter data based on alert thresholds to calculate dynamic median
+# ===================
+
+# Get base data (with standard excludes applied)
+@st.cache_data
+def get_base_coaches_for_export_cached():
+    """Get coaches with standard excludes applied."""
+    file_path = get_selected_data_file()
+    if file_path is None:
+        return pd.DataFrame()
+    df = pd.read_excel(file_path, sheet_name="Coaches")
+
+    # Apply same exclude patterns as main dashboard
+    exclude_patterns = ['nabeller']
+    exclude_exact = [
+        'Rookvrij en Fitter Het Gooi',
+        '167331984',
+        'UNKNOWN',
+        'benVitaal Coaching',
+        'SportQube Algemeen'
+    ]
+    for pattern in exclude_patterns:
+        df = df[~df['Coachnaam'].str.lower().str.contains(pattern, na=False)]
+    df = df[~df['Coachnaam'].isin(exclude_exact)]
+
+    return df
+
+# Get base data and apply manual excludes from sidebar
+na_prefilter_df = get_base_coaches_for_export_cached().copy()
+if excluded_coaches:
+    na_prefilter_df = na_prefilter_df[~na_prefilter_df['Coachnaam'].isin(excluded_coaches)].copy()
+
+# Determine nabeller column based on selected period
+nabeller_col_map = {
+    "1 maand": "nabeller_pct_1m",
+    "3 maanden": "nabeller_pct_3m",
+    "6 maanden": "nabeller_pct_6m"
+}
+nabeller_col = nabeller_col_map.get(periode_keuze, "nabeller_pct_1m")
+
+# Apply pre-filters: nabeller threshold and minimum deals
+# These coaches are used for median calculation
+na_prefilter_df['nabeller_pct'] = na_prefilter_df[nabeller_col].fillna(0)
+na_for_median_df = na_prefilter_df[
+    (na_prefilter_df['nabeller_pct'] <= na_nabeller_threshold) &
+    (na_prefilter_df[deals_col] >= na_min_deals_week)
+].copy()
+
+# Apply Top % filter from sidebar (same as main dashboard)
+if top_percentage < 100 and len(na_for_median_df) > 0:
+    na_top_cutoff = na_for_median_df[winrate_col].quantile(1 - (top_percentage / 100))
+    na_for_median_df = na_for_median_df[na_for_median_df[winrate_col] >= na_top_cutoff].copy()
+
+# Calculate DYNAMIC mediaan on pre-filtered data (after top % filter)
+na_mediaan = na_for_median_df[winrate_col].median() if len(na_for_median_df) > 0 else 0
+
+# ===================
+# NA_Pool Status Thresholds
+# ===================
+st.markdown("### ⭐ Status Thresholds voor Export")
+top_info = f" + top {top_percentage}%" if top_percentage < 100 else ""
+st.markdown(f"*Mediaan berekend op **{len(na_for_median_df)} coaches** na pre-filters{top_info}*")
+
+na_thresh_col1, na_thresh_col2 = st.columns(2)
+
+with na_thresh_col1:
+    na_laag2_threshold = st.slider(
+        f"Minimum deals voor 'Goed' ({periode_label})",
+        min_value=1,
+        max_value=30,
+        value=14,
+        step=1,
+        key="na_pool_laag2_threshold",
+        help="Bepaalt Goed vs Matig status. Verandert de mediaan NIET - gebruik pre-filters hierboven."
+    )
+
+with na_thresh_col2:
+    # Show DYNAMIC mediaan
+    st.metric(f"Mediaan winst% ({periode_label})", f"{na_mediaan:.1f}%",
+              help="Pas de pre-filters hierboven aan om de mediaan te wijzigen")
+
+# Uitleg status berekening
+with st.expander("ℹ️ Hoe wordt status berekend voor export?"):
+    st.markdown(f"""
+    **De regels (voor {periode_label}):**
+
+    ✅ **Goed** (wordt geëxporteerd) =
+    - Minimaal **{na_laag2_threshold}** deals
+    - Winstpercentage **≥ {na_mediaan:.1f}%** (mediaan)
+
+    ⭐ **Matig** (wordt geëxporteerd) =
+    - Minimaal **{na_laag2_threshold // 2}** deals
+    - Winstpercentage **≥ {na_mediaan * 0.8:.1f}%** (80% van mediaan)
+
+    ❌ **Uitsluiten** (wordt NIET geëxporteerd) =
+    - Voldoet niet aan bovenstaande criteria
+
+    🚫 **Nabeller te hoog** (wordt NIET geëxporteerd) =
+    - Nabeller % > {na_nabeller_threshold}%
+
+    ⚪ **Te weinig deals** (wordt NIET geëxporteerd) =
+    - Minder dan {na_min_deals_week} deals in {periode_label}
+    """)
 
 st.markdown("---")
 
@@ -764,55 +827,23 @@ with na_col3:
     )
 
 # ===================
-# Calculate eligible coaches using same logic as dashboard
+# Calculate eligible coaches using dynamic mediaan
 # ===================
 
-# Get base data (with standard excludes applied)
-@st.cache_data
-def get_base_coaches_for_export():
-    """Get coaches with standard excludes applied."""
-    file_path = get_selected_data_file()
-    if file_path is None:
-        return pd.DataFrame()
-    df = pd.read_excel(file_path, sheet_name="Coaches")
+# Use pre-filtered data (na_prefilter_df already has excludes and nabeller_pct column)
+na_base_df = na_prefilter_df.copy()
 
-    # Apply same exclude patterns as main dashboard
-    exclude_patterns = ['nabeller']
-    exclude_exact = [
-        'Rookvrij en Fitter Het Gooi',
-        '167331984',
-        'UNKNOWN',
-        'benVitaal Coaching',
-        'SportQube Algemeen'
-    ]
-    for pattern in exclude_patterns:
-        df = df[~df['Coachnaam'].str.lower().str.contains(pattern, na=False)]
-    df = df[~df['Coachnaam'].isin(exclude_exact)]
+# Calculate top % cutoff for status calculation
+na_top_cutoff = None
+if top_percentage < 100 and len(na_base_df) > 0:
+    na_top_cutoff = na_base_df[winrate_col].quantile(1 - (top_percentage / 100))
 
-    return df
-
-# Get base data and apply manual excludes from sidebar
-na_base_df = get_base_coaches_for_export().copy()
-if excluded_coaches:
-    na_base_df = na_base_df[~na_base_df['Coachnaam'].isin(excluded_coaches)].copy()
-
-# Determine nabeller column based on selected period
-nabeller_col_map = {
-    "1 maand": "nabeller_pct_1m",
-    "3 maanden": "nabeller_pct_3m",
-    "6 maanden": "nabeller_pct_6m"
-}
-nabeller_col = nabeller_col_map.get(periode_keuze, "nabeller_pct_1m")
-
-# Calculate mediaan on base data
-na_mediaan = na_base_df[winrate_col].median()
-
-# Apply dynamic status calculation for NA_Pool (same logic as dashboard)
-# NOW INCLUDES: nabeller threshold and minimum deals filter
+# Apply dynamic status calculation for NA_Pool
+# Uses the DYNAMIC mediaan calculated on pre-filtered data
 def calculate_na_status(row):
     deals = row[deals_col]
     winrate = row[winrate_col]
-    nabeller_pct = row.get(nabeller_col, 0) or 0
+    nabeller_pct = row.get('nabeller_pct', 0) or 0
 
     # First check: nabeller % too high -> exclude
     if nabeller_pct > na_nabeller_threshold:
@@ -821,6 +852,10 @@ def calculate_na_status(row):
     # Second check: not enough deals for meaningful data
     if deals < na_min_deals_week:
         return "⚪ Te weinig deals"
+
+    # Third check: below top X% threshold
+    if na_top_cutoff is not None and winrate < na_top_cutoff:
+        return f"📉 Buiten top {top_percentage}%"
 
     if deals == 0:
         return "⚪ Geen data"
@@ -833,15 +868,13 @@ def calculate_na_status(row):
 
 na_base_df['na_status'] = na_base_df.apply(calculate_na_status, axis=1)
 
-# Add nabeller % to dataframe for display
-na_base_df['nabeller_pct'] = na_base_df[nabeller_col]
-
 # Select only eligible coaches (Goed or Matig)
 na_eligible_df = na_base_df[na_base_df['na_status'].isin(['✅ Goed', '⭐ Matig'])].copy()
 
-# Count coaches excluded by nabeller threshold
+# Count coaches excluded by various filters
 na_nabeller_excluded = na_base_df[na_base_df['na_status'] == '🚫 Nabeller te hoog']
 na_too_few_deals = na_base_df[na_base_df['na_status'] == '⚪ Te weinig deals']
+na_below_top_pct = na_base_df[na_base_df['na_status'].str.contains('Buiten top', na=False)]
 
 # Count coaches with and without owner_id
 na_with_id = na_eligible_df[na_eligible_df['coach_id'].notna() & (na_eligible_df['coach_id'] != '')]
@@ -888,6 +921,12 @@ if len(na_too_few_deals) > 0:
     with st.expander(f"⚪ {len(na_too_few_deals)} coach(es) uitgesloten: < {na_min_deals_week} deals"):
         for _, row in na_too_few_deals.iterrows():
             st.write(f"- {row['Coachnaam']} ({row[deals_col]} deals)")
+
+# Show coaches below top X%
+if len(na_below_top_pct) > 0:
+    with st.expander(f"📉 {len(na_below_top_pct)} coach(es) uitgesloten: buiten top {top_percentage}%"):
+        for _, row in na_below_top_pct.iterrows():
+            st.write(f"- {row['Coachnaam']} (winst: {row[winrate_col]:.1f}%)")
 
 # Show skipped coaches if any
 if len(na_without_id) > 0:

@@ -4,14 +4,20 @@ Google Sheets writer for NA_Pool export.
 Usage (lokaal):
     export GOOGLE_SA_JSON_PATH=/pad/naar/service_account.json
 
+    Of zet GOOGLE_SA_JSON_PATH in .env file.
+
     Zorg dat de service account email (uit de JSON) editor toegang heeft tot de Google Sheet.
 """
 
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Tuple, List, Dict, Any
 
 import pandas as pd
+
+# Default fallback path relative to project root
+DEFAULT_SA_PATH = Path(__file__).parent / "secrets" / "service_account.json"
 
 
 def get_gspread_client():
@@ -24,7 +30,12 @@ def get_gspread_client():
     import gspread
     from google.oauth2.service_account import Credentials
 
+    # Try environment variable first
     sa_path = os.environ.get("GOOGLE_SA_JSON_PATH")
+
+    # Fallback to default path if env var not set
+    if not sa_path and DEFAULT_SA_PATH.is_file():
+        sa_path = str(DEFAULT_SA_PATH)
 
     if not sa_path:
         raise EnvironmentError(
