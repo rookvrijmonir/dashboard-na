@@ -5,6 +5,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
 import json
+import os
 
 # ============================================================================
 # PAGE CONFIGURATION
@@ -612,6 +613,348 @@ st.dataframe(
         "Boven drempel": st.column_config.CheckboxColumn(help=f"✅ = meer dan {min_deals} deals")
     }
 )
+
+# ============================================================================
+# SECTION 5: NA_POOL EXPORT
+# ============================================================================
+
+st.markdown("---")
+st.markdown("## 📤 NA_Pool Export")
+st.markdown(f"*Push eligible coaches naar Google Sheets (NA_Pool tabblad) - Periode: **{periode_label}***")
+
+# Check if GOOGLE_SA_JSON_PATH is set
+google_sa_path = os.environ.get("GOOGLE_SA_JSON_PATH")
+if not google_sa_path:
+    st.warning(
+        "⚠️ **GOOGLE_SA_JSON_PATH** environment variable is niet ingesteld.\n\n"
+        "Stel in met:\n```\nexport GOOGLE_SA_JSON_PATH=/pad/naar/service_account.json\n```\n\n"
+        "De push functie is uitgeschakeld tot dit is ingesteld."
+    )
+    na_pool_enabled = False
+else:
+    na_pool_enabled = True
+
+# ===================
+# NA_Pool Status Thresholds (zelfde logica als sidebar)
+# ===================
+st.markdown("### ⭐ Status Thresholds voor Export")
+st.markdown(f"*Bepaal welke coaches eligible zijn voor NA_Pool (gebaseerd op {periode_label})*")
+
+na_thresh_col1, na_thresh_col2 = st.columns(2)
+
+with na_thresh_col1:
+    na_laag2_threshold = st.slider(
+        f"Minimum deals voor 'Goed' ({periode_label})",
+        min_value=1,
+        max_value=30,
+        value=14,
+        step=1,
+        key="na_pool_laag2_threshold",
+        help=f"Coaches met minimaal dit aantal deals EN boven de mediaan krijgen status 'Goed'"
+    )
+
+with na_thresh_col2:
+    # Calculate mediaan for display
+    na_base_mediaan = coaches_df[winrate_col].median()
+    st.metric(f"Mediaan winst% ({periode_label})", f"{na_base_mediaan:.1f}%")
+
+# Uitleg status berekening
+with st.expander("ℹ️ Hoe wordt status berekend voor export?"):
+    st.markdown(f"""
+    **De regels (voor {periode_label}):**
+
+    ✅ **Goed** (wordt geëxporteerd) =
+    - Minimaal **{na_laag2_threshold}** deals
+    - Winstpercentage **≥ {na_base_mediaan:.1f}%** (mediaan)
+
+    ⭐ **Matig** (wordt geëxporteerd) =
+    - Minimaal **{na_laag2_threshold // 2}** deals
+    - Winstpercentage **≥ {na_base_mediaan * 0.8:.1f}%** (80% van mediaan)
+
+    ❌ **Uitsluiten** (wordt NIET geëxporteerd) =
+    - Voldoet niet aan bovenstaande criteria
+
+    ⚪ **Geen data** (wordt NIET geëxporteerd) =
+    - 0 deals in {periode_label}
+    """)
+
+st.markdown("---")
+
+# ===================
+# Alert Thresholds (zelfde als Week Monitor)
+# ===================
+st.markdown("### ⚠️ Alert Thresholds")
+st.markdown("*Dezelfde thresholds als op de Week Monitor pagina*")
+
+na_alert_col1, na_alert_col2, na_alert_col3 = st.columns(3)
+
+with na_alert_col1:
+    na_nabeller_threshold = st.slider(
+        "Nabeller % drempel",
+        min_value=5,
+        max_value=50,
+        value=20,
+        step=5,
+        key="na_pool_nabeller_threshold",
+        help="Coaches met nabeller % boven deze waarde worden uitgesloten"
+    )
+
+with na_alert_col2:
+    na_won_rate_drop = st.slider(
+        "Won rate daling drempel",
+        min_value=5,
+        max_value=30,
+        value=15,
+        step=5,
+        key="na_pool_won_rate_drop",
+        help="Coaches met won rate die meer dan X% onder 4-weeks gemiddelde ligt worden gemarkeerd"
+    )
+
+with na_alert_col3:
+    na_min_deals_week = st.slider(
+        "Minimum deals/week",
+        min_value=1,
+        max_value=15,
+        value=5,
+        step=1,
+        key="na_pool_min_deals_week",
+        help="Minimum deals per week om mee te tellen voor alerts"
+    )
+
+st.markdown("---")
+
+# ===================
+# Google Sheets Parameters
+# ===================
+st.markdown("### ⚙️ Google Sheets Parameters")
+
+na_col1, na_col2, na_col3 = st.columns(3)
+
+with na_col1:
+    na_cap_dag = st.number_input(
+        "cap_dag",
+        min_value=1,
+        max_value=20,
+        value=2,
+        step=1,
+        key="na_pool_cap_dag",
+        help="Maximum aantal leads per dag per coach"
+    )
+
+with na_col2:
+    na_cap_week = st.number_input(
+        "cap_week",
+        min_value=1,
+        max_value=50,
+        value=14,
+        step=1,
+        key="na_pool_cap_week",
+        help="Maximum aantal leads per week per coach"
+    )
+
+with na_col3:
+    na_weight = st.number_input(
+        "weight",
+        min_value=1,
+        max_value=10,
+        value=1,
+        step=1,
+        key="na_pool_weight",
+        help="Gewicht voor lead verdeling"
+    )
+
+# ===================
+# Calculate eligible coaches using same logic as dashboard
+# ===================
+
+# Get base data (with standard excludes applied)
+@st.cache_data
+def get_base_coaches_for_export():
+    """Get coaches with standard excludes applied."""
+    file_path = get_selected_data_file()
+    if file_path is None:
+        return pd.DataFrame()
+    df = pd.read_excel(file_path, sheet_name="Coaches")
+
+    # Apply same exclude patterns as main dashboard
+    exclude_patterns = ['nabeller']
+    exclude_exact = [
+        'Rookvrij en Fitter Het Gooi',
+        '167331984',
+        'UNKNOWN',
+        'benVitaal Coaching',
+        'SportQube Algemeen'
+    ]
+    for pattern in exclude_patterns:
+        df = df[~df['Coachnaam'].str.lower().str.contains(pattern, na=False)]
+    df = df[~df['Coachnaam'].isin(exclude_exact)]
+
+    return df
+
+# Get base data and apply manual excludes from sidebar
+na_base_df = get_base_coaches_for_export().copy()
+if excluded_coaches:
+    na_base_df = na_base_df[~na_base_df['Coachnaam'].isin(excluded_coaches)].copy()
+
+# Determine nabeller column based on selected period
+nabeller_col_map = {
+    "1 maand": "nabeller_pct_1m",
+    "3 maanden": "nabeller_pct_3m",
+    "6 maanden": "nabeller_pct_6m"
+}
+nabeller_col = nabeller_col_map.get(periode_keuze, "nabeller_pct_1m")
+
+# Calculate mediaan on base data
+na_mediaan = na_base_df[winrate_col].median()
+
+# Apply dynamic status calculation for NA_Pool (same logic as dashboard)
+# NOW INCLUDES: nabeller threshold and minimum deals filter
+def calculate_na_status(row):
+    deals = row[deals_col]
+    winrate = row[winrate_col]
+    nabeller_pct = row.get(nabeller_col, 0) or 0
+
+    # First check: nabeller % too high -> exclude
+    if nabeller_pct > na_nabeller_threshold:
+        return "🚫 Nabeller te hoog"
+
+    # Second check: not enough deals for meaningful data
+    if deals < na_min_deals_week:
+        return "⚪ Te weinig deals"
+
+    if deals == 0:
+        return "⚪ Geen data"
+    elif deals >= na_laag2_threshold and winrate >= na_mediaan:
+        return "✅ Goed"
+    elif deals >= (na_laag2_threshold // 2) and winrate >= na_mediaan * 0.8:
+        return "⭐ Matig"
+    else:
+        return "❌ Uitsluiten"
+
+na_base_df['na_status'] = na_base_df.apply(calculate_na_status, axis=1)
+
+# Add nabeller % to dataframe for display
+na_base_df['nabeller_pct'] = na_base_df[nabeller_col]
+
+# Select only eligible coaches (Goed or Matig)
+na_eligible_df = na_base_df[na_base_df['na_status'].isin(['✅ Goed', '⭐ Matig'])].copy()
+
+# Count coaches excluded by nabeller threshold
+na_nabeller_excluded = na_base_df[na_base_df['na_status'] == '🚫 Nabeller te hoog']
+na_too_few_deals = na_base_df[na_base_df['na_status'] == '⚪ Te weinig deals']
+
+# Count coaches with and without owner_id
+na_with_id = na_eligible_df[na_eligible_df['coach_id'].notna() & (na_eligible_df['coach_id'] != '')]
+na_without_id = na_eligible_df[na_eligible_df['coach_id'].isna() | (na_eligible_df['coach_id'] == '')]
+
+# Status counts
+na_status_counts = na_base_df['na_status'].value_counts()
+
+# ===================
+# Show Preview
+# ===================
+st.markdown("### 📊 Selectie Preview")
+
+# Show status distribution
+st.markdown("**Status verdeling met huidige thresholds:**")
+status_prev_cols = st.columns(4)
+for i, (status, count) in enumerate(na_status_counts.items()):
+    with status_prev_cols[i % 4]:
+        is_eligible = status in ['✅ Goed', '⭐ Matig']
+        label = f"{status} {'→ export' if is_eligible else ''}"
+        st.metric(label, count)
+
+st.markdown("---")
+
+# Summary metrics
+prev_col1, prev_col2, prev_col3, prev_col4 = st.columns(4)
+with prev_col1:
+    st.metric("Eligible (Goed + Matig)", len(na_eligible_df))
+with prev_col2:
+    st.metric("Met owner_id", len(na_with_id))
+with prev_col3:
+    st.metric("Zonder owner_id (skip)", len(na_without_id))
+with prev_col4:
+    st.metric("Wordt geschreven", len(na_with_id))
+
+# Show coaches excluded by nabeller threshold
+if len(na_nabeller_excluded) > 0:
+    with st.expander(f"🚫 {len(na_nabeller_excluded)} coach(es) uitgesloten: nabeller % > {na_nabeller_threshold}%"):
+        for _, row in na_nabeller_excluded.iterrows():
+            st.write(f"- {row['Coachnaam']} (nabeller: {row['nabeller_pct']:.1f}%)")
+
+# Show coaches with too few deals
+if len(na_too_few_deals) > 0:
+    with st.expander(f"⚪ {len(na_too_few_deals)} coach(es) uitgesloten: < {na_min_deals_week} deals"):
+        for _, row in na_too_few_deals.iterrows():
+            st.write(f"- {row['Coachnaam']} ({row[deals_col]} deals)")
+
+# Show skipped coaches if any
+if len(na_without_id) > 0:
+    with st.expander(f"⚠️ {len(na_without_id)} coach(es) zonder owner_id worden geskipt"):
+        for _, row in na_without_id.iterrows():
+            st.write(f"- {row['Coachnaam']} (status: {row['na_status']})")
+
+# Show preview table of eligible coaches
+with st.expander(f"👁️ Preview: {len(na_eligible_df)} eligible coaches"):
+    preview_table = na_eligible_df[['Coachnaam', 'coach_id', deals_col, winrate_col, 'nabeller_pct', 'na_status']].copy()
+    preview_table = preview_table.sort_values(winrate_col, ascending=False)
+    preview_table = preview_table.rename(columns={
+        'Coachnaam': 'Coach',
+        'coach_id': 'Owner ID',
+        deals_col: 'Deals',
+        winrate_col: 'Winst%',
+        'nabeller_pct': 'Nabeller%',
+        'na_status': 'Status'
+    })
+    st.dataframe(preview_table, use_container_width=True, hide_index=True)
+
+# ===================
+# Push Button
+# ===================
+st.markdown("### 🚀 Push naar Google Sheets")
+
+if na_pool_enabled:
+    if st.button("Push NA_Pool naar Google Sheets", type="primary", key="push_na_pool"):
+        try:
+            from gsheets_writer import push_to_na_pool
+
+            with st.spinner("Bezig met pushen naar Google Sheets..."):
+                geschreven, geskipt, geskipte_namen = push_to_na_pool(
+                    df=na_eligible_df,
+                    weight=int(na_weight),
+                    cap_dag=int(na_cap_dag),
+                    cap_week=int(na_cap_week)
+                )
+
+            st.success(f"✅ **Push succesvol!**\n\n- Geschreven: {geschreven} coaches\n- Geskipt (geen owner_id): {geskipt}")
+
+            if geskipte_namen:
+                with st.expander("Geskipte coaches"):
+                    for naam in geskipte_namen:
+                        st.write(f"- {naam}")
+
+            # Show preview of written data
+            if geschreven > 0:
+                st.markdown("#### Preview geschreven data (eerste 20 rijen)")
+                preview_df = na_with_id.head(20)[['coach_id', 'Coachnaam', winrate_col, 'na_status']].copy()
+                preview_df['eligible'] = 'JA'
+                preview_df['weight'] = na_weight
+                preview_df['cap_dag'] = na_cap_dag
+                preview_df['cap_week'] = na_cap_week
+                preview_df = preview_df.rename(columns={
+                    'coach_id': 'owner_id',
+                    'Coachnaam': 'coach_naam',
+                    winrate_col: 'winst%',
+                    'na_status': 'status'
+                })
+                st.dataframe(preview_df, use_container_width=True, hide_index=True)
+
+        except Exception as e:
+            st.error(f"❌ **Fout bij pushen:**\n\n{str(e)}")
+else:
+    st.button("Push NA_Pool naar Google Sheets", type="primary", disabled=True, key="push_na_pool_disabled")
+    st.info("Stel GOOGLE_SA_JSON_PATH in om de push functie te activeren.")
 
 # ============================================================================
 # FOOTER
