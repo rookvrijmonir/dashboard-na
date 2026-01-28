@@ -31,3 +31,5 @@ etl/logs/
 # Secrets
 .env
 .env.local
+secrets/
+streamlit_secret_toevoegen.txt
