@@ -622,15 +622,21 @@ st.markdown("---")
 st.markdown("## 📤 NA_Pool Export")
 st.markdown(f"*Push eligible coaches naar Google Sheets (NA_Pool tabblad) - Periode: **{periode_label}***")
 
-# Check if GOOGLE_SA_JSON_PATH is set or fallback exists
+# Check if Google Service Account is available (file, env var, or Streamlit secrets)
 google_sa_path = os.environ.get("GOOGLE_SA_JSON_PATH")
 google_sa_fallback = Path("secrets/service_account.json")
+_has_streamlit_secret = False
+try:
+    _has_streamlit_secret = "gcp_service_account" in st.secrets
+except Exception:
+    pass
 
-if not google_sa_path and not google_sa_fallback.is_file():
+if not google_sa_path and not google_sa_fallback.is_file() and not _has_streamlit_secret:
     st.warning(
         "⚠️ **Google Service Account niet gevonden.**\n\n"
-        "Plaats `service_account.json` in de `secrets/` map, of stel in met:\n"
-        "```\nexport GOOGLE_SA_JSON_PATH=/pad/naar/service_account.json\n```"
+        "**Lokaal:** Plaats `service_account.json` in de `secrets/` map, of stel in met:\n"
+        "```\nexport GOOGLE_SA_JSON_PATH=/pad/naar/service_account.json\n```\n"
+        "**Streamlit Cloud:** Voeg `gcp_service_account` toe in Settings → Secrets."
     )
     na_pool_enabled = False
 else:

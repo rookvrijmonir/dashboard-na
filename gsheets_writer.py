@@ -24,11 +24,21 @@ def get_gspread_client():
     """
     Initialize gspread client using service account JSON.
 
+    Tries in order:
+      1. GOOGLE_SA_JSON_PATH environment variable (local file path)
+      2. secrets/service_account.json fallback (local file)
+      3. st.secrets["gcp_service_account"] (Streamlit Cloud)
+
     Returns:
         gspread.Client or raises an exception with clear message.
     """
     import gspread
     from google.oauth2.service_account import Credentials
+
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
 
     # Try environment variable first
     sa_path = os.environ.get("GOOGLE_SA_JSON_PATH")
@@ -37,29 +47,29 @@ def get_gspread_client():
     if not sa_path and DEFAULT_SA_PATH.is_file():
         sa_path = str(DEFAULT_SA_PATH)
 
-    if not sa_path:
-        raise EnvironmentError(
-            "GOOGLE_SA_JSON_PATH environment variable is niet ingesteld.\n\n"
-            "Stel in met:\n"
-            "  export GOOGLE_SA_JSON_PATH=/pad/naar/service_account.json\n\n"
-            "De service account moet editor toegang hebben tot de Google Sheet."
-        )
+    if sa_path:
+        if not os.path.isfile(sa_path):
+            raise FileNotFoundError(
+                f"Service account bestand niet gevonden: {sa_path}\n\n"
+                "Controleer of het pad correct is."
+            )
+        credentials = Credentials.from_service_account_file(sa_path, scopes=scopes)
+        return gspread.authorize(credentials)
 
-    if not os.path.isfile(sa_path):
-        raise FileNotFoundError(
-            f"Service account bestand niet gevonden: {sa_path}\n\n"
-            "Controleer of het pad correct is."
-        )
+    # Fallback to Streamlit Cloud secrets
+    try:
+        import streamlit as st
+        sa_info = st.secrets["gcp_service_account"]
+        credentials = Credentials.from_service_account_info(dict(sa_info), scopes=scopes)
+        return gspread.authorize(credentials)
+    except Exception:
+        pass
 
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-
-    credentials = Credentials.from_service_account_file(sa_path, scopes=scopes)
-    client = gspread.authorize(credentials)
-
-    return client
+    raise EnvironmentError(
+        "Google Service Account niet gevonden.\n\n"
+        "Lokaal: plaats service_account.json in secrets/ of stel GOOGLE_SA_JSON_PATH in.\n"
+        "Streamlit Cloud: voeg gcp_service_account toe aan Settings → Secrets."
+    )
 
 
 def push_to_na_pool(
