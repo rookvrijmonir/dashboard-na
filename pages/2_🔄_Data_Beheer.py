@@ -84,9 +84,9 @@ def load_runs() -> dict:
     return {"runs": [], "selected": None}
 
 
-def save_runs(runs_data: dict):
-    """Save run history to JSON locally and to GCS."""
-    # Try local write first
+def save_runs(runs_data: dict, sync_gcs: bool = False):
+    """Save run history to JSON locally, optionally to GCS."""
+    # Try local write
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         with open(RUNS_FILE, "w") as f:
@@ -94,13 +94,14 @@ def save_runs(runs_data: dict):
     except (OSError, PermissionError):
         pass
 
-    # Always try GCS upload
-    try:
-        from gcs_storage import upload_runs_json_bytes, gcs_available
-        if gcs_available():
-            upload_runs_json_bytes(runs_data)
-    except Exception:
-        pass
+    # GCS upload only when explicitly requested (e.g. after ETL run)
+    if sync_gcs:
+        try:
+            from gcs_storage import upload_runs_json_bytes, gcs_available
+            if gcs_available():
+                upload_runs_json_bytes(runs_data)
+        except Exception:
+            pass
 
 
 def scan_existing_runs() -> list:
@@ -272,11 +273,16 @@ def run_etl_with_progress(refresh_all: bool = True):
     on_cloud = is_streamlit_cloud()
     has_gcs = gcs_storage.gcs_available()
 
+    # Ensure PAT is in os.environ so calculate_metrics.hs_headers() works
+    # (on Cloud it lives in st.secrets, not os.environ)
+    os.environ["HUBSPOT_PAT"] = pat
+
     # Monkey-patch module-level paths so ETL writes to writable dirs
     import etl.fetch_hubspot as _fh
     import etl.calculate_metrics as _cm
     _fh.CACHE_DIR = work_cache
     _fh.DATA_DIR = work_data
+    _fh.LOG_DIR = work_data / "_logs"
     _cm.CACHE_DIR = work_cache
     _cm.DATA_DIR = work_data
 
@@ -427,7 +433,7 @@ def run_etl_with_progress(refresh_all: bool = True):
         runs_data["runs"] = [r for r in runs_data["runs"] if r["run_id"] != run_id]
         runs_data["runs"].insert(0, new_entry)
         runs_data["selected"] = run_id
-        save_runs(runs_data)
+        save_runs(runs_data, sync_gcs=True)
 
         steps[5]["state"] = "done"
         steps[5]["text"] = "Opgeslagen naar cloud"
@@ -449,6 +455,7 @@ def run_etl_with_progress(refresh_all: bool = True):
         # Restore original module paths
         _fh.CACHE_DIR = PROJECT_ROOT / "etl" / "cache"
         _fh.DATA_DIR = PROJECT_ROOT / "data"
+        _fh.LOG_DIR = PROJECT_ROOT / "etl" / "logs"
         _cm.CACHE_DIR = PROJECT_ROOT / "etl" / "cache"
         _cm.DATA_DIR = PROJECT_ROOT / "data"
 
