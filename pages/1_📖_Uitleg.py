@@ -35,7 +35,7 @@ Het dashboard bestaat uit meerdere pagina's, bereikbaar via het linkermenu:
 | **📖 Uitleg** | Deze handleiding |
 | **🔄 Data Beheer** | Data ophalen uit HubSpot, runs beheren |
 | **📊 Week Monitor** | Wekelijkse trends en alerts per coach |
-| **👥 Coach Beschikbaarheid** | Beschikbaarheid van coaches |
+| **👥 Coach Beschikbaarheid** | Beschikbaarheid van coaches beheren via Google Sheets |
 | **📤 NA_Pool Export** | Coaches selecteren en pushen naar Google Sheets |
 """)
 
@@ -56,16 +56,20 @@ Bijvoorbeeld: "Minimum deals" op het dashboard beïnvloedt de NA_Pool Export **n
 """)
 
 st.markdown("""
-| Filter | Dashboard | NA_Pool Export | Week Monitor |
-|--------|-----------|----------------|--------------|
-| Periode (1m/3m/6m) | Globaal | Globaal | Globaal |
-| Coach exclusie | Globaal | Globaal | Globaal |
-| Minimum deals | Lokaal | Lokaal (eigen) | Lokaal (eigen) |
-| Top % | Lokaal | Lokaal (eigen) | — |
-| Minimum conversie | Lokaal | — | — |
-| Nabeller % drempel | — | Lokaal | Lokaal (eigen) |
-| Laag2 threshold | — | Lokaal | — |
-| cap/weight | — | Lokaal | — |
+| Filter | Dashboard | NA_Pool Export | Week Monitor | Beschikbaarheid |
+|--------|-----------|----------------|--------------|-----------------|
+| Periode (1m/3m/6m) | Globaal | Globaal | Globaal | — |
+| Coach exclusie | Globaal | Globaal | Globaal | — |
+| Minimum deals | Lokaal | Lokaal (eigen) | — | — |
+| Top % | Lokaal | Lokaal (eigen) | — | — |
+| Minimum conversie | Lokaal | — | — | — |
+| Nabeller % drempel | — | Lokaal | — | — |
+| Laag2 threshold | — | Lokaal | — | — |
+| cap/weight | — | Lokaal | — | — |
+| Aantal weken | — | — | Lokaal | — |
+| Coach selectie | — | — | Lokaal | — |
+| Eligibility filter | — | — | Lokaal | — |
+| Alert thresholds | — | — | Lokaal | — |
 """)
 
 st.markdown("""
@@ -221,9 +225,6 @@ st.markdown("""
 
 **Warme aanvraag** en **Info aanvraag** geven inzicht in de **drukte per coach**.
 Een coach met veel warme aanvragen heeft meer nieuwe leads in behandeling.
-
-**Tip:** Deze kolommen zijn pas beschikbaar na een verse data-run.
-Bij oudere data-runs worden ze niet getoond.
 """)
 
 # ============================================================================
@@ -247,12 +248,117 @@ De **📤 NA_Pool Export** pagina is een **zelfstandige pagina** met eigen filte
 Alleen de globale filters (periode en exclusie) worden gedeeld.
 """)
 
+st.markdown("""
+**Extra statussen op de NA_Pool pagina:**
+
+| Status | Betekenis |
+|--------|-----------|
+| ✅ Goed | Wordt geëxporteerd |
+| ⭐ Matig | Wordt geëxporteerd |
+| ❌ Uitsluiten | Wordt NIET geëxporteerd — onder de drempel |
+| 🚫 Nabeller te hoog | Wordt NIET geëxporteerd — nabeller % boven drempel |
+| ⚪ Te weinig deals | Wordt NIET geëxporteerd — te weinig deals |
+| 📉 Buiten top X% | Wordt NIET geëxporteerd — valt buiten top % selectie |
+""")
+
+st.markdown("""
+**Google Sheets parameters:**
+
+Bij het pushen naar Google Sheets kun je drie extra parameters instellen:
+
+| Parameter | Standaard | Betekenis |
+|-----------|-----------|-----------|
+| **cap_dag** | 2 | Maximum aantal leads per dag per coach |
+| **cap_week** | 14 | Maximum aantal leads per week per coach |
+| **weight** | 1 | Gewicht voor lead verdeling |
+
+Na een succesvolle push wordt automatisch een **Cloud Function** aangeroepen
+om de NA_Pool te verwerken.
+""")
+
 # ============================================================================
-# SECTION 8: UITGEFILTERDE DATA
+# SECTION 8: WEEK MONITOR
 # ============================================================================
 
 st.markdown("---")
-st.markdown("## 8. Welke data is automatisch uitgefilterd?")
+st.markdown("## 8. Week Monitor")
+
+st.warning("""
+**Let op:** De Week Monitor is uitsluitend bedoeld voor **signalering** van trends
+en afwijkingen. Gebruik deze pagina **niet** voor de definitieve selectie van coaches.
+""")
+
+st.markdown("""
+De **📊 Week Monitor** toont wekelijkse prestaties en genereert alerts bij
+afwijkend gedrag.
+
+**Drie secties:**
+
+**1️⃣ Alerts Deze Week**
+- Toont coaches met afwijkende prestaties in de meest recente week
+- Twee soorten alerts:
+  - **Nabeller % te hoog** — nabeller percentage boven de ingestelde drempel
+  - **Won rate daling** — won rate deze week is meer dan X% lager dan het 4-weeks gemiddelde
+
+**2️⃣ Coach Detail**
+- Selecteer een coach in de sidebar om detail-charts te zien
+- **Won Rate per Week** — lijndiagram met weeklijkse won rate en 4-weeks voortschrijdend gemiddelde
+- **Nabeller % per Week** — lijndiagram met nabeller percentage en drempellijn
+- **Deals per Week** — staafdiagram met het aantal deals per week
+- **Weekoverzicht tabel** — details per week (deals, won, lost, open, won rate, nabeller)
+
+**3️⃣ Overzicht Alle Coaches**
+- Tabel met alle coaches voor de meest recente week
+- Gesorteerd op aantal deals
+""")
+
+st.markdown("""
+**Alert thresholds** (instelbaar in de sidebar):
+
+| Threshold | Standaard | Betekenis |
+|-----------|-----------|-----------|
+| Nabeller % drempel | 20% | Alert als nabeller % boven deze waarde |
+| Won rate daling | 15% | Alert als won rate meer dan dit daalt t.o.v. 4-weeks gemiddelde |
+| Minimum deals/week | 5 | Negeer weken met minder deals (ruis beperken) |
+""")
+
+# ============================================================================
+# SECTION 9: COACH BESCHIKBAARHEID
+# ============================================================================
+
+st.markdown("---")
+st.markdown("## 9. Coach Beschikbaarheid")
+
+st.markdown("""
+De **👥 Coach Beschikbaarheid** pagina beheert welke coaches beschikbaar zijn
+voor Nationale Apotheek leads. De data wordt opgeslagen in Google Sheets.
+
+**Overzicht:** Bovenaan zie je een samenvatting met het aantal coaches per status:
+
+| Status | Betekenis |
+|--------|-----------|
+| 🟢 Beschikbaar | Coach staat open voor NA leads en is niet afwezig |
+| 🟡 Afwezig | Coach is afwezig in de ingestelde periode |
+| 🔴 NA leads uit | Coach ontvangt geen NA leads |
+
+**Bewerken:** Via de bewerkbare tabel kun je per coach aanpassen:
+- **NA leads aan** — of de coach open staat voor NA leads
+- **Afwezig van/tot** — periode van afwezigheid
+- **Notitie** — toelichting (bijv. "Vakantie" of "Te druk")
+
+**Snelle acties:** Onderaan de pagina kun je snel:
+- Een coach **afwezig melden** met een datum-range en reden
+- **NA leads aan/uit** zetten per coach
+
+Wijzigingen worden opgeslagen in Google Sheets via de **Opslaan** knop.
+""")
+
+# ============================================================================
+# SECTION 10: UITGEFILTERDE DATA
+# ============================================================================
+
+st.markdown("---")
+st.markdown("## 10. Welke data is automatisch uitgefilterd?")
 
 st.error("""
 **Automatisch verwijderde entries:**
@@ -270,28 +376,35 @@ Deze worden op **alle pagina's** automatisch verwijderd.
 """)
 
 # ============================================================================
-# SECTION 9: DATA BEHEER
+# SECTION 11: DATA BEHEER
 # ============================================================================
 
 st.markdown("---")
-st.markdown("## 9. Data vernieuwen")
+st.markdown("## 11. Data vernieuwen")
 
 st.markdown("""
 1. Ga naar **🔄 Data Beheer** in het linkermenu
-2. Klik op **Data Ophalen**
-3. Wacht tot de voortgang 100% is
+2. Kies een van de twee opties:
+   - **🔄 Data Ophalen** — Slimme refresh: hergebruikt cache voor contacten en koppelingen,
+     haalt alleen verse deals op. Dit is de snelste optie.
+   - **🔄 Volledige Refresh** — Haalt alles opnieuw op uit HubSpot.
+     Gebruik dit als contacten of koppelingen gewijzigd zijn.
+3. Volg de voortgang via de stappen-indicator (6 stappen)
 4. De nieuwe data wordt automatisch geselecteerd
 
 **Run historie:** Elke keer dat je data ophaalt, wordt een nieuwe "run" opgeslagen.
 Je kunt altijd terug naar eerdere runs via de dropdown in Data Beheer.
+
+**Cloud opslag:** Alle runs worden ook opgeslagen in Google Cloud Storage,
+zodat ze beschikbaar zijn wanneer het dashboard draait op Streamlit Cloud.
 """)
 
 # ============================================================================
-# SECTION 10: FAQ
+# SECTION 12: FAQ
 # ============================================================================
 
 st.markdown("---")
-st.markdown("## 10. Veelgestelde vragen")
+st.markdown("## 12. Veelgestelde vragen")
 
 with st.expander("Waarom heeft coach X een hoog percentage maar status 'Uitsluiten'?"):
     st.markdown("""
@@ -320,15 +433,41 @@ with st.expander("Wat zijn 'Warme aanvraag' en 'Info aanvraag'?"):
       informatie hebben opgevraagd
 
     Deze kolommen geven inzicht in de drukte per coach.
-    Ze zijn beschikbaar na een verse data-run met de bijgewerkte ETL.
     """)
 
-with st.expander("Ik zie 'Warme aanvraag' / 'Info aanvraag' niet in de tabel"):
+with st.expander("Wat is het verschil tussen 'Data Ophalen' en 'Volledige Refresh'?"):
     st.markdown("""
-    Deze kolommen worden pas beschikbaar na een **verse data-run** met de
-    bijgewerkte ETL. Oudere runs bevatten deze kolommen niet.
+    - **Data Ophalen:** Hergebruikt cache voor contacten en koppelingen, en haalt
+      alleen verse deals op uit HubSpot. Dit is sneller.
+    - **Volledige Refresh:** Alles wordt opnieuw opgehaald uit HubSpot. Gebruik
+      dit als contacten of koppelingen gewijzigd zijn.
+    """)
 
-    Ga naar **🔄 Data Beheer** en haal verse data op.
+with st.expander("Wat betekenen de alerts in de Week Monitor?"):
+    st.markdown("""
+    Alerts signaleren afwijkend gedrag in de **meest recente week**:
+
+    - **Nabeller % te hoog:** Het percentage deals uit de nabeller-pipeline
+      is hoger dan de ingestelde drempel (standaard 20%)
+    - **Won rate daling:** De won rate deze week is significant lager dan het
+      voortschrijdend 4-weeks gemiddelde
+
+    Alerts worden alleen gegenereerd voor weken met voldoende deals (standaard 5+).
+    """)
+
+with st.expander("Hoe werkt Coach Beschikbaarheid?"):
+    st.markdown("""
+    De Coach Beschikbaarheid pagina slaat gegevens op in een Google Sheet.
+    Je kunt per coach instellen:
+
+    - Of ze **NA leads** ontvangen (aan/uit)
+    - **Afwezigheidsperiodes** met start- en einddatum
+    - Een **notitie** met de reden
+
+    De status wordt automatisch berekend:
+    - 🟢 **Beschikbaar** — leads staan aan en niet afwezig
+    - 🟡 **Afwezig** — binnen een afwezigheidsperiode
+    - 🔴 **NA leads uit** — leads zijn uitgeschakeld
     """)
 
 # ============================================================================
