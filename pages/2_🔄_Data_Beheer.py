@@ -5,6 +5,7 @@ import os
 import sys
 import time
 import shutil
+import tempfile
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -31,25 +32,74 @@ CACHE_DIR = PROJECT_ROOT / "etl" / "cache"
 RUNS_FILE = DATA_DIR / "runs.json"
 
 
+def _fs_is_writable(path: Path = DATA_DIR) -> bool:
+    """Check if the filesystem at *path* is writable."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".write_probe"
+        probe.write_text("ok")
+        probe.unlink()
+        return True
+    except (OSError, PermissionError):
+        return False
+
+
+def _get_work_dirs() -> tuple[Path, Path]:
+    """Return (data_dir, cache_dir) that are guaranteed writable.
+
+    On a writable filesystem the normal project dirs are used.
+    On a read-only filesystem (Streamlit Cloud) we fall back to /tmp.
+    """
+    if _fs_is_writable(DATA_DIR):
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        return DATA_DIR, CACHE_DIR
+
+    tmp_root = Path(tempfile.mkdtemp(prefix="coach_dashboard_"))
+    tmp_data = tmp_root / "data"
+    tmp_cache = tmp_root / "etl" / "cache"
+    tmp_data.mkdir(parents=True, exist_ok=True)
+    tmp_cache.mkdir(parents=True, exist_ok=True)
+    return tmp_data, tmp_cache
+
+
 def load_runs() -> dict:
     """Load run history from JSON."""
     if RUNS_FILE.is_file():
         try:
             with open(RUNS_FILE, "r") as f:
                 return json.load(f)
-        except:
+        except Exception:
             pass
+
+    # Fallback: try GCS
+    try:
+        from gcs_storage import download_runs_json_data, gcs_available
+        if gcs_available():
+            data = download_runs_json_data()
+            if data:
+                return data
+    except Exception:
+        pass
+
     return {"runs": [], "selected": None}
 
 
 def save_runs(runs_data: dict):
-    """Save run history to JSON. Silently fails on read-only filesystem (Streamlit Cloud)."""
+    """Save run history to JSON locally and to GCS."""
+    # Try local write first
     try:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
         with open(RUNS_FILE, "w") as f:
             json.dump(runs_data, f, indent=2, default=str)
     except (OSError, PermissionError):
-        # Read-only filesystem (Streamlit Cloud) - ignore
+        pass
+
+    # Always try GCS upload
+    try:
+        from gcs_storage import upload_runs_json_bytes, gcs_available
+        if gcs_available():
+            upload_runs_json_bytes(runs_data)
+    except Exception:
         pass
 
 
@@ -83,7 +133,7 @@ def scan_existing_runs() -> list:
             try:
                 df = pd.read_excel(eligibility_file, sheet_name="Coaches")
                 coach_count = len(df)
-            except:
+            except Exception:
                 coach_count = None
 
             # Get folder size
@@ -100,7 +150,7 @@ def scan_existing_runs() -> list:
                 "coach_count": coach_count,
                 "has_enums": enums_file.is_file()
             })
-        except Exception as e:
+        except Exception:
             continue
 
     # Sort by datetime, newest first
@@ -112,9 +162,7 @@ def sync_runs_file():
     """Sync runs.json with actual folders in data directory."""
     runs_data = load_runs()
 
-    # On Streamlit Cloud, trust runs.json (we can't write anyway)
-    # Only scan and replace on local environments
-    if not is_streamlit_cloud():
+    if _fs_is_writable(DATA_DIR):
         scanned = scan_existing_runs()
         runs_data["runs"] = scanned
 
@@ -133,12 +181,10 @@ def sync_runs_file():
 
 def is_streamlit_cloud() -> bool:
     """Detect if running on Streamlit Cloud."""
-    # Streamlit Cloud runs from /mount/src or has HOME=/home/appuser
     if Path("/mount/src").exists():
         return True
     if os.environ.get("HOME") == "/home/appuser":
         return True
-    # Also check for the STREAMLIT_SHARING_MODE env var (older detection)
     if os.environ.get("STREAMLIT_SHARING_MODE"):
         return True
     return False
@@ -146,15 +192,12 @@ def is_streamlit_cloud() -> bool:
 
 def get_hubspot_pat() -> str:
     """Get HUBSPOT_PAT from Streamlit secrets or environment."""
-    # First try Streamlit secrets (for Streamlit Cloud)
     try:
         pat = st.secrets.get("HUBSPOT_PAT", "")
         if pat and not pat.startswith("pat-xx-"):
             return pat
     except Exception:
         pass
-
-    # Fallback to environment variable (for local .env)
     return os.environ.get("HUBSPOT_PAT", "")
 
 
@@ -166,8 +209,33 @@ def check_env_file() -> bool:
     return False
 
 
+def _step_html(step_num: int, total: int, text: str, state: str = "pending") -> str:
+    """Return styled HTML for a step indicator.
+
+    state: 'done', 'active', 'pending'
+    """
+    if state == "done":
+        icon = "&#x2705;"  # green check
+        color = "#28a745"
+    elif state == "active":
+        icon = "&#x1F504;"  # arrows
+        color = "#0d6efd"
+    else:
+        icon = "&#x2B1C;"  # white square
+        color = "#6c757d"
+
+    return (
+        f"<div style='padding:2px 0; color:{color}; font-size:0.95em;'>"
+        f"{icon} <b>Stap {step_num}/{total}:</b> {text}</div>"
+    )
+
+
 def run_etl_with_progress(refresh_all: bool = True):
-    """Run ETL scripts with progress updates in Streamlit."""
+    """Run ETL scripts with progress updates in Streamlit.
+
+    Works both locally and on Streamlit Cloud by using writable tmp
+    directories as fallback and persisting output to GCS.
+    """
     from etl.fetch_hubspot import (
         Config, Workflow, ensure_dirs, load_dotenv, utc_now_run_id,
         CACHE_DIR as FETCH_CACHE_DIR, DATA_DIR as FETCH_DATA_DIR
@@ -178,18 +246,19 @@ def run_etl_with_progress(refresh_all: bool = True):
         DATA_DIR as METRICS_DATA_DIR
     )
     import logging
+    import gcs_storage
 
-    # Setup - load .env for local, st.secrets is auto-loaded
+    TOTAL_STEPS = 6
+
     load_dotenv()
 
     pat = get_hubspot_pat().strip()
     if not pat:
-        st.error("❌ HUBSPOT_PAT niet gevonden! Voeg toe via Streamlit secrets of .env bestand.")
+        st.error("HUBSPOT_PAT niet gevonden! Voeg toe via Streamlit secrets of .env bestand.")
         return None
 
     run_id = utc_now_run_id()
 
-    # Create a simple logger that doesn't interfere with Streamlit
     logger = logging.getLogger(f"etl_{run_id}")
     logger.setLevel(logging.INFO)
 
@@ -198,81 +267,190 @@ def run_etl_with_progress(refresh_all: bool = True):
         aangebracht_door_value=os.environ.get("AANGEBRACHT_DOOR_VALUE", "Nationale Apotheek").strip() or "Nationale Apotheek",
     )
 
-    # Progress tracking
+    # Determine writable directories
+    work_data, work_cache = _get_work_dirs()
+    on_cloud = is_streamlit_cloud()
+    has_gcs = gcs_storage.gcs_available()
+
+    # Monkey-patch module-level paths so ETL writes to writable dirs
+    import etl.fetch_hubspot as _fh
+    import etl.calculate_metrics as _cm
+    _fh.CACHE_DIR = work_cache
+    _fh.DATA_DIR = work_data
+    _cm.CACHE_DIR = work_cache
+    _cm.DATA_DIR = work_data
+
     progress_bar = st.progress(0)
-    status_text = st.empty()
+    status_area = st.empty()
     details_container = st.container()
 
+    # Build step tracker — mutable list so we can update states
+    steps = [
+        {"text": "Cache ophalen", "state": "pending"},
+        {"text": "Contacten laden", "state": "pending"},
+        {"text": "Deal-koppelingen laden", "state": "pending"},
+        {"text": "Deal details ophalen", "state": "pending"},
+        {"text": "Metrics berekenen", "state": "pending"},
+        {"text": "Opslaan naar cloud", "state": "pending"},
+    ]
+
+    def _render_steps(extra: str = ""):
+        html = "".join(
+            _step_html(i + 1, TOTAL_STEPS, s["text"], s["state"])
+            for i, s in enumerate(steps)
+        )
+        if extra:
+            html += f"<div style='margin-top:4px;'>{extra}</div>"
+        status_area.markdown(html, unsafe_allow_html=True)
+
     try:
+        # ── Step 1: Download cache from GCS (on Cloud or when cache is empty) ──
+        steps[0]["state"] = "active"
+        _render_steps()
+        progress_bar.progress(3)
+
+        cache_downloaded = []
+        if has_gcs and (on_cloud or not any((work_cache / f).is_file() for f in gcs_storage.CACHE_FILES)):
+            try:
+                cache_downloaded = gcs_storage.download_cache_files(work_cache)
+            except Exception:
+                pass
+
+        steps[0]["state"] = "done"
+        steps[0]["text"] = f"Cache ophalen ({len(cache_downloaded)} bestanden)"
+        _render_steps()
+
+        # Prepare workflow
         wf = Workflow(cfg, run_id, logger)
+        # Override output dir to writable location
+        run_output = work_data / run_id
+        run_output.mkdir(parents=True, exist_ok=True)
+        wf.run_output_dir = run_output
 
         with details_container:
-            st.info(f"📁 Output folder: `data/{run_id}/`")
+            st.info(f"Output folder: `data/{run_id}/`")
 
-        # Step 1: Contacts
-        status_text.markdown("**Stap 1/5:** Contacten ophalen uit HubSpot...")
+        # ── Step 2: Contacts ──
+        steps[1]["state"] = "active"
+        _render_steps()
         progress_bar.progress(10)
         contacts = wf._load_or_fetch_contacts(refresh=refresh_all)
-        with details_container:
-            st.success(f"✓ {len(contacts)} contacten geladen")
+        steps[1]["state"] = "done"
+        steps[1]["text"] = f"{len(contacts)} contacten geladen"
+        _render_steps()
 
-        # Step 2: Associations
-        status_text.markdown("**Stap 2/5:** Contact-deal koppelingen ophalen...")
+        # ── Step 3: Associations ──
+        steps[2]["state"] = "active"
+        _render_steps()
         progress_bar.progress(30)
         contact_ids = [str(c.get("id")) for c in contacts if c.get("id")]
         links = wf._load_or_fetch_associations(contact_ids, refresh=refresh_all)
         unique_deals = set()
         for ids in links.values():
             unique_deals.update(ids)
-        with details_container:
-            st.success(f"✓ {len(unique_deals)} unieke deals gevonden")
+        steps[2]["state"] = "done"
+        steps[2]["text"] = f"{len(unique_deals)} deal-koppelingen"
+        _render_steps()
 
-        # Step 3: Deals
-        status_text.markdown("**Stap 3/5:** Deal details ophalen...")
+        # ── Step 4: Deals ──
+        steps[3]["state"] = "active"
+        _render_steps()
         progress_bar.progress(50)
         deals = wf._load_or_fetch_deals(refresh=refresh_all)
-        with details_container:
-            st.success(f"✓ {len(deals)} deals geladen")
+        steps[3]["state"] = "done"
+        steps[3]["text"] = f"{len(deals)} deals opgehaald"
+        _render_steps()
 
-        # Step 4: Enums
-        status_text.markdown("**Stap 4/5:** Pipeline configuratie ophalen...")
-        progress_bar.progress(65)
-        enums_path = wf._dump_enums(deals, refresh=refresh_all)
-        with details_container:
-            st.success(f"✓ Pipeline enums opgeslagen")
+        # Save enums (part of deals step)
+        wf._dump_enums(deals, refresh=refresh_all)
 
-        # Step 5: Calculate metrics
-        status_text.markdown("**Stap 5/5:** Metrics berekenen...")
-        progress_bar.progress(80)
+        # Upload cache to GCS after fetching
+        if has_gcs:
+            try:
+                gcs_storage.upload_cache_files(work_cache)
+            except Exception:
+                pass
+
+        # ── Step 5: Calculate metrics ──
+        steps[4]["state"] = "active"
+        _render_steps()
+        progress_bar.progress(70)
 
         output_path = calculate_for_run(run_id, refresh_owners=refresh_all)
 
-        progress_bar.progress(100)
-        status_text.markdown("**Voltooid!**")
-
-        # Get coach count from output
+        # Get coach count
         try:
-            df = pd.read_excel(output_path, sheet_name="Coaches")
-            coach_count = len(df)
-        except:
+            df_out = pd.read_excel(output_path, sheet_name="Coaches")
+            coach_count = len(df_out)
+        except Exception:
             coach_count = "?"
 
-        with details_container:
-            st.success(f"✓ {coach_count} coaches verwerkt")
-            st.success(f"✓ Output: `data/{run_id}/coach_eligibility.xlsx`")
+        steps[4]["state"] = "done"
+        steps[4]["text"] = f"{coach_count} coaches verwerkt"
+        _render_steps()
+        progress_bar.progress(85)
 
-        # Sync runs file and select new run
-        runs_data = sync_runs_file()
+        # ── Step 6: Upload to GCS ──
+        steps[5]["state"] = "active"
+        _render_steps()
+        progress_bar.progress(90)
+
+        if has_gcs:
+            try:
+                gcs_storage.upload_run(run_id, run_output)
+            except Exception as e:
+                with details_container:
+                    st.warning(f"GCS run upload overgeslagen: {e}")
+
+        # Build run metadata entry
+        try:
+            dt = datetime.strptime(run_id, "%Y%m%d_%H%M%S")
+        except ValueError:
+            dt = datetime.now()
+
+        total_size = sum(f.stat().st_size for f in run_output.glob("*") if f.is_file())
+        new_entry = {
+            "run_id": run_id,
+            "folder": str(work_data / run_id),
+            "datetime": dt.isoformat(),
+            "datetime_display": dt.strftime("%d-%m-%Y %H:%M:%S"),
+            "date_display": dt.strftime("%d-%m-%Y"),
+            "time_display": dt.strftime("%H:%M:%S"),
+            "size_kb": round(total_size / 1024, 1),
+            "coach_count": coach_count if isinstance(coach_count, int) else None,
+            "has_enums": (run_output / "enums.xlsx").is_file(),
+        }
+
+        # Update runs.json
+        runs_data = load_runs()
+        # Remove existing entry with same run_id (if any)
+        runs_data["runs"] = [r for r in runs_data["runs"] if r["run_id"] != run_id]
+        runs_data["runs"].insert(0, new_entry)
         runs_data["selected"] = run_id
         save_runs(runs_data)
+
+        steps[5]["state"] = "done"
+        steps[5]["text"] = "Opgeslagen naar cloud"
+        _render_steps()
+        progress_bar.progress(100)
+
+        with details_container:
+            st.success(f"Output: `data/{run_id}/coach_eligibility.xlsx`")
 
         return run_id
 
     except Exception as e:
-        st.error(f"❌ Fout tijdens ETL: {str(e)}")
+        st.error(f"Fout tijdens ETL: {str(e)}")
         import traceback
         st.code(traceback.format_exc())
         return None
+
+    finally:
+        # Restore original module paths
+        _fh.CACHE_DIR = PROJECT_ROOT / "etl" / "cache"
+        _fh.DATA_DIR = PROJECT_ROOT / "data"
+        _cm.CACHE_DIR = PROJECT_ROOT / "etl" / "cache"
+        _cm.DATA_DIR = PROJECT_ROOT / "data"
 
 
 # Main UI
@@ -315,7 +493,7 @@ if runs_data["runs"]:
     if new_selected != runs_data["selected"]:
         runs_data["selected"] = new_selected
         save_runs(runs_data)
-        st.success(f"✓ Dataset gewijzigd!")
+        st.success("Dataset gewijzigd!")
         st.rerun()
 
     # Show current selection details
@@ -331,86 +509,75 @@ if runs_data["runs"]:
         with col4:
             st.metric("Grootte", f"{current_run['size_kb']} KB")
 
-        st.caption(f"📁 Folder: `data/{current_run['run_id']}/`")
+        st.caption(f"Folder: `data/{current_run['run_id']}/`")
 else:
-    st.warning("⚠️ Geen datasets gevonden. Gebruik de knop hieronder om data op te halen.")
+    st.warning("Geen datasets gevonden. Gebruik de knop hieronder om data op te halen.")
 
 # Section 2: Refresh Data
 st.markdown("---")
 st.markdown("## 🔄 Data Vernieuwen")
 
-if on_cloud:
-    st.info("""
-    ☁️ **Je draait op Streamlit Cloud**
+# Check prerequisites
+env_ok = check_env_file()
 
-    Data vernieuwen is alleen beschikbaar wanneer je het dashboard lokaal draait.
-    Streamlit Cloud heeft een read-only filesystem waardoor nieuwe data niet opgeslagen kan worden.
+if not env_ok:
+    st.error("""
+    **Geen HubSpot token gevonden!**
 
-    **Om data te vernieuwen:**
-    1. Draai het dashboard lokaal
-    2. Klik op "Data Ophalen"
-    3. Commit de nieuwe data naar je repository
-    4. Push naar GitHub - Streamlit Cloud update automatisch
+    **Lokaal:** Maak een `.env` bestand in de project root met:
+    ```
+    HUBSPOT_PAT=pat-xx-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+    ```
+
+    **Streamlit Cloud:** Voeg toe aan Secrets (TOML):
+    ```toml
+    HUBSPOT_PAT = "pat-xx-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    ```
     """)
 else:
-    # Check prerequisites
-    env_ok = check_env_file()
+    st.success("HubSpot configuratie gevonden")
 
-    if not env_ok:
-        st.error("""
-        ❌ **Geen HubSpot token gevonden!**
+    if on_cloud:
+        st.info("Draait op Streamlit Cloud — data wordt opgeslagen in Google Cloud Storage.")
 
-        **Lokaal:** Maak een `.env` bestand in de project root met:
-        ```
-        HUBSPOT_PAT=pat-xx-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-        ```
+    st.markdown("""
+    Klik op de knop om verse data op te halen uit HubSpot.
+    Elke run wordt opgeslagen zodat je kunt vergelijken.
+    """)
 
-        **Streamlit Cloud:** Voeg toe aan Secrets (TOML):
-        ```toml
-        HUBSPOT_PAT = "pat-xx-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-        ```
+    col1, col2 = st.columns([1, 2])
+
+    with col1:
+        if st.button("🔄 Data Ophalen", type="primary", use_container_width=True):
+            st.markdown("---")
+            st.markdown("### Voortgang")
+
+            result = run_etl_with_progress(refresh_all=True)
+
+            if result:
+                st.balloons()
+                st.success(f"Nieuwe dataset aangemaakt: `{result}`")
+                time.sleep(2)
+                st.rerun()
+
+    with col2:
+        st.info("""
+        **Wat gebeurt er?**
+        1. Cache ophalen (GCS)
+        2. Contacten ophalen (Nationale Apotheek)
+        3. Deal koppelingen ophalen
+        4. Deal details ophalen
+        5. Metrics berekenen
+        6. Opslaan naar cloud (GCS)
+
+        **Output:** `data/YYYYMMDD_HHMMSS/`
         """)
-    else:
-        st.success("✓ HubSpot configuratie gevonden")
-
-        st.markdown("""
-        Klik op de knop om verse data op te halen uit HubSpot.
-        Elke run wordt opgeslagen in een aparte map zodat je kunt vergelijken.
-        """)
-
-        col1, col2 = st.columns([1, 2])
-
-        with col1:
-            if st.button("🔄 Data Ophalen", type="primary", use_container_width=True):
-                st.markdown("---")
-                st.markdown("### Voortgang")
-
-                result = run_etl_with_progress(refresh_all=True)
-
-                if result:
-                    st.balloons()
-                    st.success(f"✅ Nieuwe dataset aangemaakt: `{result}`")
-                    time.sleep(2)
-                    st.rerun()
-
-        with col2:
-            st.info("""
-            **Wat gebeurt er?**
-            1. Contacten ophalen (Nationale Apotheek)
-            2. Deal koppelingen ophalen
-            3. Deal details ophalen
-            4. Pipeline configuratie laden
-            5. Metrics berekenen en opslaan
-
-            **Output:** `data/YYYYMMDD_HHMMSS/`
-            """)
 
 # Section 3: Run History
 st.markdown("---")
 st.markdown("## 📜 Beschikbare Runs")
 
 if runs_data["runs"]:
-    # Show as nice cards/table
     for run in runs_data["runs"]:
         is_selected = run["run_id"] == runs_data["selected"]
         icon = "✅" if is_selected else "📁"
@@ -451,7 +618,7 @@ else:
 
 # Section 4: Folder Structure Info
 st.markdown("---")
-with st.expander("ℹ️ Folder Structuur"):
+with st.expander("Folder Structuur"):
     st.markdown("""
     ```
     data/
@@ -459,15 +626,22 @@ with st.expander("ℹ️ Folder Structuur"):
     ├── mapping.xlsx           # Stage mapping (gedeeld)
     ├── 20260121_195256/       # Run folder
     │   ├── coach_eligibility.xlsx
+    │   ├── deals_flat.csv
     │   └── enums.xlsx
     └── 20260122_103000/       # Andere run
         ├── coach_eligibility.xlsx
+        ├── deals_flat.csv
         └── enums.xlsx
     ```
 
     Elke run heeft zijn eigen folder met:
     - `coach_eligibility.xlsx` - Coach metrics en eligibility
+    - `deals_flat.csv` - Deals voor Week Monitor
     - `enums.xlsx` - Pipeline en stage configuratie
+
+    **Cloud Storage:** Alle runs worden ook opgeslagen in
+    `gs://coach-dashboard-data/` zodat ze beschikbaar zijn
+    op Streamlit Cloud.
     """)
 
 # Footer

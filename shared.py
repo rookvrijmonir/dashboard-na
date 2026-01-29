@@ -9,6 +9,9 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 import json
+import logging
+
+logger = logging.getLogger(__name__)
 
 # ============================================================================
 # CONSTANTS
@@ -56,8 +59,34 @@ RUNS_FILE = DATA_DIR / "runs.json"
 # DATA LOADING
 # ============================================================================
 
+def _try_gcs_download_runs_json() -> bool:
+    """Try to download runs.json from GCS. Returns True on success."""
+    try:
+        from gcs_storage import download_runs_json, gcs_available
+        if gcs_available():
+            return download_runs_json(RUNS_FILE)
+    except Exception as e:
+        logger.debug("GCS runs.json download failed: %s", e)
+    return False
+
+
+def _try_gcs_download_run(run_id: str) -> bool:
+    """Try to download a run from GCS. Returns True on success."""
+    try:
+        from gcs_storage import download_run, gcs_available
+        if gcs_available():
+            return download_run(run_id, DATA_DIR / run_id)
+    except Exception as e:
+        logger.debug("GCS run download failed for %s: %s", run_id, e)
+    return False
+
+
 def get_selected_run_id() -> str | None:
-    """Get the currently selected run ID from runs.json."""
+    """Get the currently selected run ID from runs.json.
+    Falls back to GCS if local runs.json does not exist."""
+    if not RUNS_FILE.is_file():
+        _try_gcs_download_runs_json()
+
     if RUNS_FILE.is_file():
         try:
             with open(RUNS_FILE, "r") as f:
@@ -69,24 +98,29 @@ def get_selected_run_id() -> str | None:
 
 
 def _get_selected_data_file() -> Path | None:
-    """Get the path to the selected coach_eligibility.xlsx."""
+    """Get the path to the selected coach_eligibility.xlsx.
+    Falls back to GCS download if local file is missing."""
     run_id = get_selected_run_id()
     if run_id:
         run_file = DATA_DIR / run_id / "coach_eligibility.xlsx"
         if run_file.is_file():
             return run_file
+        # Try GCS fallback for selected run
+        if _try_gcs_download_run(run_id) and run_file.is_file():
+            return run_file
 
     # Fallback: most recent run folder
-    run_dirs = [
-        d for d in DATA_DIR.iterdir()
-        if d.is_dir() and len(d.name) == 15 and "_" in d.name
-    ]
-    if run_dirs:
-        run_dirs.sort(key=lambda p: p.name, reverse=True)
-        for run_dir in run_dirs:
-            f = run_dir / "coach_eligibility.xlsx"
-            if f.is_file():
-                return f
+    if DATA_DIR.is_dir():
+        run_dirs = [
+            d for d in DATA_DIR.iterdir()
+            if d.is_dir() and len(d.name) == 15 and "_" in d.name
+        ]
+        if run_dirs:
+            run_dirs.sort(key=lambda p: p.name, reverse=True)
+            for run_dir in run_dirs:
+                f = run_dir / "coach_eligibility.xlsx"
+                if f.is_file():
+                    return f
 
     # Legacy fallback
     files = list(DATA_DIR.glob("coach_eligibility_*.xlsx"))
@@ -98,11 +132,15 @@ def _get_selected_data_file() -> Path | None:
 
 
 def _get_selected_run_dir() -> Path | None:
-    """Get the directory of the selected run."""
+    """Get the directory of the selected run.
+    Falls back to GCS download if local dir is missing."""
     run_id = get_selected_run_id()
     if run_id:
         run_dir = DATA_DIR / run_id
         if run_dir.is_dir():
+            return run_dir
+        # Try GCS
+        if _try_gcs_download_run(run_id) and run_dir.is_dir():
             return run_dir
     return None
 
@@ -133,12 +171,20 @@ def load_deal_class_summary() -> pd.DataFrame:
 
 @st.cache_data
 def load_deals_flat() -> pd.DataFrame | None:
-    """Load deals_flat.csv from the selected run."""
+    """Load deals_flat.csv from the selected run.
+    Falls back to GCS if local file is missing."""
     run_dir = _get_selected_run_dir()
     if run_dir is None:
         return None
 
     deals_path = run_dir / "deals_flat.csv"
+    if not deals_path.is_file():
+        # _get_selected_run_dir already tried GCS, but deals_flat.csv
+        # may not have been present in the run at that point.
+        # Try explicit download.
+        run_id = run_dir.name
+        _try_gcs_download_run(run_id)
+
     if not deals_path.is_file():
         return None
 
