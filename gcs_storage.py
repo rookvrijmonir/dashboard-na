@@ -13,11 +13,13 @@ Credential lookup (same 3-tier order as gsheets_writer):
 
 from __future__ import annotations
 
-import io
 import json
+import logging
 import os
 from pathlib import Path
 from typing import List, Optional
+
+logger = logging.getLogger(__name__)
 
 BUCKET_NAME = "coach-dashboard-data"
 
@@ -37,6 +39,13 @@ CACHE_FILES = [
     "deals_raw.json",
     "owners.json",
 ]
+
+# Cached GCS client + bucket (created once per process)
+_cached_client = None
+_cached_bucket_obj = None
+
+# Timeout in seconds for individual GCS operations
+GCS_TIMEOUT = 30
 
 
 def _get_sa_info() -> Optional[dict]:
@@ -63,8 +72,14 @@ def get_gcs_client():
     """
     Return an authenticated google.cloud.storage.Client.
 
+    Caches the client so it is created only once per process.
     Raises EnvironmentError when no credentials are found.
     """
+    global _cached_client
+
+    if _cached_client is not None:
+        return _cached_client
+
     from google.cloud import storage
     from google.oauth2.service_account import Credentials
 
@@ -77,12 +92,17 @@ def get_gcs_client():
         )
 
     credentials = Credentials.from_service_account_info(sa_info)
-    return storage.Client(credentials=credentials, project=sa_info.get("project_id"))
+    _cached_client = storage.Client(credentials=credentials, project=sa_info.get("project_id"))
+    return _cached_client
 
 
 def _bucket():
-    """Return the GCS bucket object."""
-    return get_gcs_client().bucket(BUCKET_NAME)
+    """Return the GCS bucket object (cached)."""
+    global _cached_bucket_obj
+    if _cached_bucket_obj is not None:
+        return _cached_bucket_obj
+    _cached_bucket_obj = get_gcs_client().bucket(BUCKET_NAME)
+    return _cached_bucket_obj
 
 
 def gcs_available() -> bool:
@@ -108,7 +128,7 @@ def upload_run(run_id: str, run_dir: Optional[Path] = None) -> List[str]:
             continue
         blob_name = f"runs/{run_id}/{fname}"
         blob = bucket.blob(blob_name)
-        blob.upload_from_filename(str(local))
+        blob.upload_from_filename(str(local), timeout=GCS_TIMEOUT)
         uploaded.append(blob_name)
 
     return uploaded
@@ -119,6 +139,7 @@ def download_run(run_id: str, target_dir: Optional[Path] = None) -> bool:
     Download run files from GCS into a local directory.
 
     Returns True if at least coach_eligibility.xlsx was downloaded.
+    Skips individual files that fail instead of crashing.
     """
     if target_dir is None:
         target_dir = DATA_DIR / run_id
@@ -130,12 +151,13 @@ def download_run(run_id: str, target_dir: Optional[Path] = None) -> bool:
     for fname in RUN_FILES:
         blob_name = f"runs/{run_id}/{fname}"
         blob = bucket.blob(blob_name)
-        if not blob.exists():
-            continue
-        local = target_dir / fname
-        blob.download_to_filename(str(local))
-        if fname == "coach_eligibility.xlsx":
-            got_eligibility = True
+        try:
+            local = target_dir / fname
+            blob.download_to_filename(str(local), timeout=GCS_TIMEOUT)
+            if fname == "coach_eligibility.xlsx":
+                got_eligibility = True
+        except Exception as e:
+            logger.debug("GCS download skip %s: %s", blob_name, e)
 
     return got_eligibility
 
@@ -152,7 +174,7 @@ def upload_runs_json(local_path: Optional[Path] = None) -> None:
         return
     bucket = _bucket()
     blob = bucket.blob("runs.json")
-    blob.upload_from_filename(str(local_path))
+    blob.upload_from_filename(str(local_path), timeout=GCS_TIMEOUT)
 
 
 def download_runs_json(target_path: Optional[Path] = None) -> bool:
@@ -163,10 +185,12 @@ def download_runs_json(target_path: Optional[Path] = None) -> bool:
 
     bucket = _bucket()
     blob = bucket.blob("runs.json")
-    if not blob.exists():
+    try:
+        blob.download_to_filename(str(target_path), timeout=GCS_TIMEOUT)
+        return True
+    except Exception as e:
+        logger.debug("GCS download_runs_json failed: %s", e)
         return False
-    blob.download_to_filename(str(target_path))
-    return True
 
 
 def upload_runs_json_bytes(data: dict) -> None:
@@ -176,6 +200,7 @@ def upload_runs_json_bytes(data: dict) -> None:
     blob.upload_from_string(
         json.dumps(data, indent=2, default=str),
         content_type="application/json",
+        timeout=GCS_TIMEOUT,
     )
 
 
@@ -183,10 +208,12 @@ def download_runs_json_data() -> Optional[dict]:
     """Download and return runs.json content as dict, or None."""
     bucket = _bucket()
     blob = bucket.blob("runs.json")
-    if not blob.exists():
+    try:
+        raw = blob.download_as_text(timeout=GCS_TIMEOUT)
+        return json.loads(raw)
+    except Exception as e:
+        logger.debug("GCS download_runs_json_data failed: %s", e)
         return None
-    raw = blob.download_as_text()
-    return json.loads(raw)
 
 
 # -------------------------------------------------------------------------
@@ -226,14 +253,17 @@ def upload_cache_files(cache_dir: Optional[Path] = None) -> List[str]:
             continue
         blob_name = f"cache/{fname}"
         blob = bucket.blob(blob_name)
-        blob.upload_from_filename(str(local))
+        blob.upload_from_filename(str(local), timeout=GCS_TIMEOUT)
         uploaded.append(blob_name)
 
     return uploaded
 
 
 def download_cache_files(target_dir: Optional[Path] = None) -> List[str]:
-    """Download ETL cache files from GCS. Returns list of downloaded file names."""
+    """Download ETL cache files from GCS. Returns list of downloaded file names.
+
+    Skips individual files that fail (timeout/missing) instead of crashing.
+    """
     if target_dir is None:
         target_dir = CACHE_DIR
 
@@ -244,10 +274,11 @@ def download_cache_files(target_dir: Optional[Path] = None) -> List[str]:
     for fname in CACHE_FILES:
         blob_name = f"cache/{fname}"
         blob = bucket.blob(blob_name)
-        if not blob.exists():
-            continue
-        local = target_dir / fname
-        blob.download_to_filename(str(local))
-        downloaded.append(fname)
+        try:
+            local = target_dir / fname
+            blob.download_to_filename(str(local), timeout=GCS_TIMEOUT)
+            downloaded.append(fname)
+        except Exception as e:
+            logger.debug("GCS cache download skip %s: %s", blob_name, e)
 
     return downloaded

@@ -358,11 +358,11 @@ def run_etl_with_progress(refresh_all: bool = True):
         steps[2]["text"] = f"{len(unique_deals)} deal-koppelingen"
         _render_steps()
 
-        # ── Step 4: Deals ──
+        # ── Step 4: Deals — always refresh (deals change frequently) ──
         steps[3]["state"] = "active"
         _render_steps()
         progress_bar.progress(50)
-        deals = wf._load_or_fetch_deals(refresh=refresh_all)
+        deals = wf._load_or_fetch_deals(refresh=True)
         steps[3]["state"] = "done"
         steps[3]["text"] = f"{len(deals)} deals opgehaald"
         _render_steps()
@@ -552,40 +552,50 @@ else:
     Elke run wordt opgeslagen zodat je kunt vergelijken.
     """)
 
-    col1, col2 = st.columns([1, 2])
-
     # Use session_state to guard ETL execution across reruns
     if "etl_running" not in st.session_state:
         st.session_state.etl_running = False
     if "etl_result" not in st.session_state:
         st.session_state.etl_result = None
+    if "etl_refresh_all" not in st.session_state:
+        st.session_state.etl_refresh_all = False
+
+    col1, col2, col3 = st.columns([1, 1, 2])
 
     with col1:
         start_disabled = st.session_state.etl_running
-        if st.button("🔄 Data Ophalen", type="primary", use_container_width=True, disabled=start_disabled):
+        if st.button("🔄 Data Ophalen", type="primary", use_container_width=True, disabled=start_disabled,
+                      help="Slim: hergebruikt cache voor contacten/koppelingen, haalt verse deals op"):
             st.session_state.etl_running = True
+            st.session_state.etl_refresh_all = False
             st.session_state.etl_result = None
             st.rerun()
 
     with col2:
-        st.info("""
-        **Wat gebeurt er?**
-        1. Cache ophalen (GCS)
-        2. Contacten ophalen (Nationale Apotheek)
-        3. Deal koppelingen ophalen
-        4. Deal details ophalen
-        5. Metrics berekenen
-        6. Opslaan naar cloud (GCS)
+        if st.button("🔄 Volledige Refresh", use_container_width=True, disabled=start_disabled,
+                      help="Alles opnieuw ophalen uit HubSpot"):
+            st.session_state.etl_running = True
+            st.session_state.etl_refresh_all = True
+            st.session_state.etl_result = None
+            st.rerun()
 
-        **Output:** `data/YYYYMMDD_HHMMSS/`
+    with col3:
+        st.info("""
+        **Data Ophalen** — Hergebruikt cache (contacten/koppelingen),
+        haalt alleen verse deals op. Snel.
+
+        **Volledige Refresh** — Alles opnieuw uit HubSpot.
+        Gebruik als contacten/koppelingen gewijzigd zijn.
         """)
 
     # Run ETL in a separate rerun cycle so Streamlit doesn't interrupt it
     if st.session_state.etl_running:
         st.markdown("---")
-        st.markdown("### Voortgang")
+        refresh_all = st.session_state.get("etl_refresh_all", False)
+        mode_label = "Volledige refresh" if refresh_all else "Slimme refresh"
+        st.markdown(f"### Voortgang — {mode_label}")
 
-        result = run_etl_with_progress(refresh_all=True)
+        result = run_etl_with_progress(refresh_all=refresh_all)
 
         st.session_state.etl_running = False
         st.session_state.etl_result = result

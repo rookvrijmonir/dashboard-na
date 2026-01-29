@@ -89,6 +89,13 @@ def file_nonempty(path: Path) -> bool:
     return path.is_file() and path.stat().st_size > 10
 
 
+def file_age_hours(path: Path) -> float | None:
+    """Return age of file in hours, or None if file doesn't exist."""
+    if not path.is_file():
+        return None
+    return (time.time() - path.stat().st_mtime) / 3600
+
+
 def newest_file(pattern: str, directory: Path) -> Optional[Path]:
     files = list(directory.glob(pattern))
     if not files:
@@ -209,7 +216,7 @@ class HubSpotClient:
             if not nxt:
                 break
             after = nxt.get("after")
-            time.sleep(0.2)
+            time.sleep(0.05)
 
         return out
 
@@ -236,6 +243,37 @@ class HubSpotClient:
             time.sleep(0.1)
         return deal_ids
 
+    def batch_read_contact_associations(self, contact_ids: List[str]) -> Dict[str, List[str]]:
+        """Fetch contact->deal associations in batch using v4 API.
+
+        Returns dict mapping contact_id -> list of deal_ids.
+        Uses POST /crm/v4/associations/contacts/deals/batch/read
+        with 100 contacts per batch instead of 1 API call per contact.
+        """
+        url = f"{self.cfg.base_url}/crm/v4/associations/contacts/deals/batch/read"
+        result: Dict[str, List[str]] = {}
+        chunk_size = 100
+
+        for i in range(0, len(contact_ids), chunk_size):
+            chunk = contact_ids[i:i + chunk_size]
+            body = {"inputs": [{"id": str(cid)} for cid in chunk]}
+            self.log.info(
+                "Batch associations %d-%d / %d",
+                i + 1, min(i + chunk_size, len(contact_ids)), len(contact_ids),
+            )
+            r = self._request_with_retries("POST", url, json_body=body)
+            data = r.json()
+
+            for item in data.get("results", []):
+                from_id = str(item.get("from", {}).get("id", ""))
+                to_ids = [str(t.get("toObjectId", "")) for t in item.get("to", [])]
+                if from_id:
+                    result[from_id] = sorted(set(to_ids))
+
+            time.sleep(0.1)
+
+        return result
+
     def batch_read_deals(self, deal_ids: List[str], properties: List[str]) -> List[Dict[str, Any]]:
         url = f"{self.cfg.base_url}/crm/v3/objects/deals/batch/read"
         out: List[Dict[str, Any]] = []
@@ -250,7 +288,7 @@ class HubSpotClient:
             r = self._request_with_retries("POST", url, json_body=body)
             data = r.json()
             out.extend(data.get("results", []))
-            time.sleep(0.2)
+            time.sleep(0.05)
 
         return out
 
@@ -272,8 +310,11 @@ class Workflow:
     def _load_or_fetch_contacts(self, refresh: bool) -> List[Dict[str, Any]]:
         cache_json = CACHE_DIR / "na_contacts.json"
         if not refresh and file_nonempty(cache_json):
-            self.log.info("Using cached NA contacts: %s", cache_json)
-            return read_json(cache_json)
+            age = file_age_hours(cache_json)
+            if age is None or age < 24:
+                self.log.info("Using cached NA contacts (%.1fh old): %s", age or 0, cache_json)
+                return read_json(cache_json)
+            self.log.info("Contacts cache expired (%.1fh old), re-fetching", age)
 
         self.log.info("Fetching NA contacts (aangebracht_door=%s)...", self.cfg.aangebracht_door_value)
         props = ["hs_object_id", "firstname", "lastname", "hubspot_owner_id", "aangebracht_door"]
@@ -299,17 +340,14 @@ class Workflow:
     def _load_or_fetch_associations(self, contact_ids: List[str], refresh: bool) -> Dict[str, List[str]]:
         cache_json = CACHE_DIR / "contact_deal_links.json"
         if not refresh and file_nonempty(cache_json):
-            self.log.info("Using cached contact->deal links: %s", cache_json)
-            return read_json(cache_json)
+            age = file_age_hours(cache_json)
+            if age is None or age < 24:
+                self.log.info("Using cached contact->deal links (%.1fh old): %s", age or 0, cache_json)
+                return read_json(cache_json)
+            self.log.info("Associations cache expired (%.1fh old), re-fetching", age)
 
-        self.log.info("Fetching associations (contact -> deals) for %d contacts...", len(contact_ids))
-        links: Dict[str, List[str]] = {}
-        for idx, cid in enumerate(contact_ids, start=1):
-            if idx % 50 == 0:
-                self.log.info("Progress associations: %d/%d", idx, len(contact_ids))
-            deal_ids = self.client.get_associated_deals_for_contact(str(cid))
-            links[str(cid)] = list(sorted(set(deal_ids)))
-            time.sleep(0.05)
+        self.log.info("Fetching associations (contact -> deals) for %d contacts (batch)...", len(contact_ids))
+        links = self.client.batch_read_contact_associations(contact_ids)
 
         write_json(cache_json, links)
 
@@ -319,7 +357,7 @@ class Workflow:
         deal_ids_list = sorted(all_deal_ids)
         write_json(CACHE_DIR / "deal_ids.json", deal_ids_list)
 
-        self.log.info("Associations fetched. Unique deals: %d", len(deal_ids_list))
+        self.log.info("Associations fetched (batch). Unique deals: %d", len(deal_ids_list))
         return links
 
     def _load_or_fetch_deals(self, refresh: bool) -> List[Dict[str, Any]]:
