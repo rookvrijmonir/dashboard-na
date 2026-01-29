@@ -4,6 +4,10 @@ import json
 from datetime import datetime, date
 from pathlib import Path
 
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from gsheets_writer import get_gspread_client
+
 st.set_page_config(
     page_title="Coach Beschikbaarheid - Nationale Apotheek",
     page_icon="👥",
@@ -14,36 +18,8 @@ st.title("👥 Coach Beschikbaarheid")
 st.markdown("Beheer welke coaches beschikbaar zijn voor Nationale Apotheek leads.")
 
 # ============================================================================
-# GOOGLE SHEETS CONNECTION
+# GOOGLE SHEETS CONNECTION (uses gsheets_writer.get_gspread_client)
 # ============================================================================
-
-def get_google_credentials():
-    """Get Google credentials from Streamlit secrets."""
-    try:
-        # Try to get from Streamlit secrets
-        if "gcp_service_account" in st.secrets:
-            return st.secrets["gcp_service_account"]
-        return None
-    except Exception:
-        return None
-
-
-def get_gspread_client():
-    """Create authenticated gspread client."""
-    import gspread
-    from google.oauth2.service_account import Credentials
-
-    creds_dict = get_google_credentials()
-    if not creds_dict:
-        return None
-
-    scopes = [
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-
-    credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
-    return gspread.authorize(credentials)
 
 
 def get_sheet_url():
@@ -156,10 +132,15 @@ def load_coaches_from_data():
 # ============================================================================
 
 # Check if Google Sheets is configured
-creds = get_google_credentials()
+try:
+    _gs_client = get_gspread_client()
+    _gs_available = _gs_client is not None
+except Exception:
+    _gs_available = False
+
 sheet_url = get_sheet_url()
 
-if not creds:
+if not _gs_available:
     st.warning("""
     ⚠️ **Google Sheets niet geconfigureerd**
 

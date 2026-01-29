@@ -40,6 +40,10 @@ PIPELINE_STATUS_BEGELEIDING = "15413220"
 PIPELINE_NABELLER = "38341389"
 STAGE_TIJDELIJK_STOPPEN = "15413630"
 
+# Dealstage IDs for warme aanvraag / info aanvraag counting
+STAGES_WARME_AANVRAAG = {"114855767", "81686449"}      # Both pipelines
+STAGES_INFO_AANVRAAG = {"15415582", "116831596"}        # Both pipelines
+
 SMOOTHING_ALPHA = 3
 SMOOTHING_BETA = 5
 
@@ -286,6 +290,10 @@ def compute_metrics(deals_df: pd.DataFrame) -> pd.DataFrame:
             nabeller_now = int((dd["pipeline"] == PIPELINE_NABELLER).sum())
             handoff = int((dd["class"] == "NABELLER_HANDOFF").sum())
 
+            # Count warme aanvraag and info aanvraag deals
+            warme_aanvraag = int(dd["dealstage"].isin(STAGES_WARME_AANVRAAG).sum())
+            info_aanvraag = int(dd["dealstage"].isin(STAGES_INFO_AANVRAAG).sum())
+
             rate = (won / total * 100.0) if total else 0.0
             smoothed = ((won + SMOOTHING_ALPHA) / (total + SMOOTHING_BETA) * 100.0) if (total + SMOOTHING_BETA) else 0.0
             nabeller_pct = (nabeller_now / total * 100.0) if total else 0.0
@@ -300,6 +308,8 @@ def compute_metrics(deals_df: pd.DataFrame) -> pd.DataFrame:
                 f"nabeller_now_{p_name}": nabeller_now,
                 f"nabeller_pct_{p_name}": round(nabeller_pct, 1),
                 f"handoff_{p_name}": handoff,
+                f"warme_aanvraag_{p_name}": warme_aanvraag,
+                f"info_aanvraag_{p_name}": info_aanvraag,
             })
 
         out_rows.append(row_base)
@@ -463,7 +473,7 @@ def write_deals_flat_csv(deals_df: pd.DataFrame, owners: Dict[str, str], run_dir
     - pipeline
     - class (WON/LOST/OPEN/NABELLER_HANDOFF)
     """
-    flat_df = deals_df[["deal_id", "coach_id", "pipeline", "class", "created_dt"]].copy()
+    flat_df = deals_df[["deal_id", "coach_id", "pipeline", "dealstage", "class", "created_dt"]].copy()
 
     # Add coach name
     if owners:
@@ -477,7 +487,7 @@ def write_deals_flat_csv(deals_df: pd.DataFrame, owners: Dict[str, str], run_dir
     )
 
     # Reorder columns
-    flat_df = flat_df[["deal_id", "coach_id", "Coachnaam", "created_dt", "pipeline", "class"]]
+    flat_df = flat_df[["deal_id", "coach_id", "Coachnaam", "created_dt", "pipeline", "dealstage", "class"]]
 
     out_path = run_dir / "deals_flat.csv"
     flat_df.to_csv(out_path, index=False, encoding="utf-8")
