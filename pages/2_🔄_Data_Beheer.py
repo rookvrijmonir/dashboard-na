@@ -554,18 +554,18 @@ else:
 
     col1, col2 = st.columns([1, 2])
 
+    # Use session_state to guard ETL execution across reruns
+    if "etl_running" not in st.session_state:
+        st.session_state.etl_running = False
+    if "etl_result" not in st.session_state:
+        st.session_state.etl_result = None
+
     with col1:
-        if st.button("🔄 Data Ophalen", type="primary", use_container_width=True):
-            st.markdown("---")
-            st.markdown("### Voortgang")
-
-            result = run_etl_with_progress(refresh_all=True)
-
-            if result:
-                st.balloons()
-                st.success(f"Nieuwe dataset aangemaakt: `{result}`")
-                time.sleep(2)
-                st.rerun()
+        start_disabled = st.session_state.etl_running
+        if st.button("🔄 Data Ophalen", type="primary", use_container_width=True, disabled=start_disabled):
+            st.session_state.etl_running = True
+            st.session_state.etl_result = None
+            st.rerun()
 
     with col2:
         st.info("""
@@ -579,6 +579,25 @@ else:
 
         **Output:** `data/YYYYMMDD_HHMMSS/`
         """)
+
+    # Run ETL in a separate rerun cycle so Streamlit doesn't interrupt it
+    if st.session_state.etl_running:
+        st.markdown("---")
+        st.markdown("### Voortgang")
+
+        result = run_etl_with_progress(refresh_all=True)
+
+        st.session_state.etl_running = False
+        st.session_state.etl_result = result
+
+        if result:
+            st.balloons()
+            st.success(f"Nieuwe dataset aangemaakt: `{result}`")
+            time.sleep(2)
+            st.rerun()
+
+    elif st.session_state.etl_result:
+        st.success(f"Laatste run: `{st.session_state.etl_result}`")
 
 # Section 3: Run History
 st.markdown("---")
