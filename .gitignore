@@ -33,3 +33,5 @@ etl/logs/
 .env.local
 secrets/
 streamlit_secret_toevoegen.txt
+streamlit_secrets.txt
+*-invoker-key.json

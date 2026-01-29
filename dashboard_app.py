@@ -995,6 +995,33 @@ if na_pool_enabled:
                 })
                 st.dataframe(preview_df, use_container_width=True, hide_index=True)
 
+                # Trigger Cloud Function refresh
+                with st.spinner("Pool-refresh Cloud Function aanroepen..."):
+                    try:
+                        from gsheets_writer import trigger_na_pool_refresh
+                        refresh_result = trigger_na_pool_refresh()
+
+                        entries = refresh_result.get('entries', '?')
+                        issues = refresh_result.get('issues', [])
+
+                        if issues:
+                            st.warning(
+                                f"⚠️ **Pool-refresh afgerond** — {entries} entries, "
+                                f"{len(issues)} issues"
+                            )
+                            with st.expander("Issues"):
+                                for issue in issues:
+                                    st.write(f"- {issue}")
+                        else:
+                            st.success(
+                                f"🔄 **Pool-refresh afgerond** — {entries} entries verwerkt"
+                            )
+                    except Exception as refresh_err:
+                        st.warning(
+                            f"⚠️ Push naar Sheets gelukt, maar pool-refresh mislukt: "
+                            f"{refresh_err}"
+                        )
+
         except Exception as e:
             st.error(f"❌ **Fout bij pushen:**\n\n{str(e)}")
 else:

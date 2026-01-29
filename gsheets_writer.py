@@ -159,6 +159,62 @@ def push_to_na_pool(
     return len(rows_to_write), len(skipped_coaches), skipped_coaches
 
 
+def trigger_na_pool_refresh() -> Dict[str, Any]:
+    """
+    Trigger the NA Pool refresh Cloud Function after a successful push.
+
+    Uses ID token authentication with the service account credentials
+    (same priority order as get_gspread_client).
+
+    Returns:
+        Dict with response data from the Cloud Function (entries, issues).
+    """
+    import json
+    import requests as http_requests
+    from google.oauth2 import service_account as sa
+    from google.auth.transport.requests import Request
+
+    target_url = (
+        "https://europe-west1-rookvrij-automation.cloudfunctions.net/na-pool-refresh"
+    )
+
+    # Get service account info — same priority as get_gspread_client
+    sa_info = None
+
+    sa_path = os.environ.get("GOOGLE_SA_JSON_PATH")
+    if not sa_path and DEFAULT_SA_PATH.is_file():
+        sa_path = str(DEFAULT_SA_PATH)
+
+    if sa_path and os.path.isfile(sa_path):
+        with open(sa_path) as f:
+            sa_info = json.load(f)
+
+    if sa_info is None:
+        try:
+            import streamlit as st
+            sa_info = dict(st.secrets["gcp_service_account"])
+        except Exception:
+            pass
+
+    if sa_info is None:
+        raise EnvironmentError(
+            "Service account niet gevonden voor Cloud Function authenticatie."
+        )
+
+    credentials = sa.IDTokenCredentials.from_service_account_info(
+        sa_info, target_audience=target_url
+    )
+    credentials.refresh(Request())
+
+    response = http_requests.post(
+        target_url,
+        headers={"Authorization": f"Bearer {credentials.token}"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
 def test_connection(sheet_id: str = "1f3fbZasyqt_UwZtXuShHJ8f9H66lUB3KE20vj6OFxwI") -> Dict[str, Any]:
     """
     Test connection to Google Sheets and return sheet info.
